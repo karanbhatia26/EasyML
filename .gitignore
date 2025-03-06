@@ -1,1 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
 venv/
+
+
+.ipynb_checkpoints
+data/
+datasets/
+*.csv
+*.npy
+!model_info.csv  # Keep this specific CSV file
+*.png
+learning_curves*.png
+pipeline_evolution.png
+baseline_comparison.png
+evaluation_results.png
+agent_collaboration.png
+
+# IDE related
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+lightning_logs/
+
+# Cache
+.cache/
