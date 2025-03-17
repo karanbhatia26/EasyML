@@ -4,12 +4,10 @@ from collections import namedtuple
 
 class PipelineStateRepresentation:
     def __init__(self):
-        # Initialize the state space as a dynamic dictionary
         self.state_space: Dict[str, Dict[str, Any]] = {}
         
     def add_component_data(self, current_component: str, next_component: str, 
                           performance_delta: float, context: Dict[str, Any]):
-        """Add or update information about component combinations."""
         if current_component not in self.state_space:
             self.state_space[current_component] = {
                 "next_components": set(),
@@ -19,7 +17,6 @@ class PipelineStateRepresentation:
         
         self.state_space[current_component]["next_components"].add(next_component)
         
-        # Update performance metrics
         if next_component not in self.state_space[current_component]["performance"]:
             self.state_space[current_component]["performance"][next_component] = {
                 "count": 0,
@@ -32,24 +29,19 @@ class PipelineStateRepresentation:
         perf["count"] += 1
         perf["sum_delta"] += performance_delta
         
-        # Online update of mean and variance (Welford's algorithm)
         old_mean = perf["mean"]
         perf["mean"] = old_mean + (performance_delta - old_mean) / perf["count"]
         perf["variance"] += (performance_delta - old_mean) * (performance_delta - perf["mean"])
-        
-        # Store context information
         if next_component not in self.state_space[current_component]["contexts"]:
             self.state_space[current_component]["contexts"][next_component] = []
         self.state_space[current_component]["contexts"][next_component].append(context)
     
     def get_valid_next_components(self, current_component: str) -> Set[str]:
-        """Get the set of valid next components for the current component."""
         if current_component in self.state_space:
             return self.state_space[current_component]["next_components"]
         return set()
     
     def get_component_performance(self, current_component: str, next_component: str) -> Tuple[float, float]:
-        """Get the mean performance delta and confidence interval for a component combination."""
         if (current_component in self.state_space and 
             next_component in self.state_space[current_component]["performance"]):
             perf = self.state_space[current_component]["performance"][next_component]

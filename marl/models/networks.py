@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 class DQNetwork(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):

@@ -230,10 +230,10 @@ class PipelineEnvironment(gym.Env):
                     future = executor.submit(self._fit_and_score_pipeline, steps)
                     try:
                         # Set a 30-second timeout
-                        score = future.result(timeout=90)
+                        score = future.result(timeout=300)
                         return score
                     except concurrent.futures.TimeoutError:
-                        print("Pipeline evaluation timed out after 30 seconds")
+                        print("Pipeline evaluation timed out after 300 seconds")
                         return 0.0
             except Exception as inner_e:
                 print(f"Pipeline evaluation failed during fitting/scoring: \n{str(inner_e)}")
@@ -253,6 +253,180 @@ class PipelineEnvironment(gym.Env):
         except Exception as e:
             print(f"Pipeline fitting/scoring error: {str(e)}")
             return 0.0
+    
+    def evaluate_pipeline_on_test(self, pipeline_components):
+        """Evaluate a pipeline on the true test set to get unbiased performance."""
+        steps = []
+        
+        # Remove END_PIPELINE token if present
+        pipeline_components = [comp for comp in pipeline_components if comp != "END_PIPELINE"]
+        
+        # Check if the pipeline ends with a classifier
+        if not pipeline_components or not any(model_name in pipeline_components[-1] 
+                for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
+                                 'GradientBoostingClassifier', 'KNeighborsClassifier']):
+            print("Pipeline evaluation skipped: Pipeline must end with a classifier")
+            return {'val_score': 0.0, 'test_score': 0.0, 'gap': 0.0}
+        
+        try:
+            # Add user-selected components
+            for i, component_str in enumerate(pipeline_components):
+                if component_str == "END_PIPELINE":
+                    continue
+                    
+                if component_str not in COMPONENT_MAP:
+                    print(f"Pipeline evaluation failed: Component not found: {component_str}")
+                    return {'val_score': 0.0, 'test_score': 0.0, 'gap': 0.0}
+                    
+                component = COMPONENT_MAP[component_str]
+                steps.append((f'step_{i}', component))
+            
+            pipeline = Pipeline(steps)
+            pipeline.fit(self.X_train, self.y_train)  # Train on training data
+            val_score = pipeline.score(self.X_val, self.y_val)  # Validation score
+            test_score = pipeline.score(self.X_test, self.y_test)  # True test score
+            
+            return {
+                'val_score': val_score,
+                'test_score': test_score,
+                'gap': val_score - test_score  # Overfitting indicator
+            }
+        except Exception as e:
+            print(f"Test evaluation error: {str(e)}")
+            return {'val_score': 0.0, 'test_score': 0.0, 'gap': 0.0}
+
+    def compare_with_baselines(self, pipeline_components):
+        """Compare your pipeline with baseline models."""
+        from sklearn.dummy import DummyClassifier
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.ensemble import RandomForestClassifier
+        
+        # Your best pipeline
+        pipeline_result = self.evaluate_pipeline_on_test(pipeline_components)
+        
+        # Train baseline models
+        baselines = {}
+        
+        # 1. Majority class baseline
+        dummy = DummyClassifier(strategy="most_frequent")
+        dummy.fit(self.X_train, self.y_train)
+        baselines["Majority Class"] = dummy.score(self.X_test, self.y_test)
+        
+        # 2. Simple Logistic Regression
+        lr = LogisticRegression(max_iter=1000)
+        lr.fit(self.X_train, self.y_train)
+        baselines["Logistic Regression"] = lr.score(self.X_test, self.y_test)
+        
+        # 3. RandomForest with default params
+        rf = RandomForestClassifier(n_estimators=100)
+        rf.fit(self.X_train, self.y_train)
+        baselines["Random Forest"] = rf.score(self.X_test, self.y_test)
+        
+        # Compare results
+        results = {
+            "Your Pipeline": pipeline_result['test_score'],
+            **baselines
+        }
+        
+        # Print comparison
+        print("\nModel Performance Comparison:")
+        print("="*40)
+        for model, score in results.items():
+            print(f"{model:20s}: {score:.4f}")
+        
+        # Return improvement percentage over best baseline
+        best_baseline = max(baselines.values())
+        improvement = (pipeline_result['test_score'] - best_baseline) / best_baseline * 100 if best_baseline > 0 else 0
+        
+        return {
+            'pipeline_score': pipeline_result['test_score'],
+            'best_baseline': best_baseline,
+            'improvement': improvement,
+            'all_results': results
+        }
+
+    def cross_validate_pipeline(self, pipeline_components, cv=5):
+        """Test pipeline stability through cross-validation."""
+        from sklearn.model_selection import cross_val_score
+        import numpy as np
+        
+        # Remove END_PIPELINE token if present
+        pipeline_components = [comp for comp in pipeline_components if comp != "END_PIPELINE"]
+        
+        # Create steps
+        steps = []
+        for i, component_str in enumerate(pipeline_components):
+            if component_str == "END_PIPELINE":
+                continue
+                
+            if component_str not in COMPONENT_MAP:
+                print(f"Pipeline evaluation failed: Component not found: {component_str}")
+                return {'mean_score': 0.0, 'std_score': 0.0, 'stability': 0.0}
+                
+            component = COMPONENT_MAP[component_str]
+            steps.append((f'step_{i}', component))
+        
+        try:
+            pipeline = Pipeline(steps)
+            
+            # Combine train and val sets for cross-validation
+            import pandas as pd
+            X_combined = pd.concat([self.X_train, self.X_val])
+            y_combined = np.concatenate([self.y_train, self.y_val])
+            
+            # Perform cross-validation
+            cv_scores = cross_val_score(pipeline, X_combined, y_combined, cv=cv)
+            
+            return {
+                'mean_score': cv_scores.mean(),
+                'std_score': cv_scores.std(),
+                'all_scores': cv_scores,
+                'stability': 1 - (cv_scores.std() / cv_scores.mean()) if cv_scores.mean() > 0 else 0  # Higher is more stable
+            }
+        except Exception as e:
+            print(f"Cross-validation error: {str(e)}")
+            return {'mean_score': 0.0, 'std_score': 0.0, 'stability': 0.0}
+
+    def validate_pipeline_results(self, best_pipeline):
+        """Comprehensive validation of pipeline results."""
+        print(f"\n{'='*20} PIPELINE VALIDATION {'='*20}\n")
+        
+        # 1. Test set performance
+        print("\n[1] Test Set Performance:")
+        test_results = self.evaluate_pipeline_on_test(best_pipeline)
+        print(f"Validation score: {test_results['val_score']:.4f}")
+        print(f"Test score: {test_results['test_score']:.4f}")
+        print(f"Gap (overfitting indicator): {test_results['gap']:.4f}")
+        
+        # 2. Baseline comparison
+        print("\n[2] Baseline Comparison:")
+        baseline_results = self.compare_with_baselines(best_pipeline)
+        print(f"Improvement over best baseline: {baseline_results['improvement']:.2f}%")
+        
+        # 3. Stability check
+        print("\n[3] Stability Analysis (Cross-validation):")
+        cv_results = self.cross_validate_pipeline(best_pipeline)
+        print(f"Mean CV score: {cv_results['mean_score']:.4f} ± {cv_results['std_score']:.4f}")
+        print(f"Stability score: {cv_results['stability']:.4f} (higher is better)")
+        
+        # 4. Summary
+        print("\n[4] Final Assessment:")
+        overall_quality = "Poor"
+        if test_results['test_score'] > 0.7 and baseline_results['improvement'] > 5 and cv_results['stability'] > 0.9:
+            overall_quality = "Excellent"
+        elif test_results['test_score'] > 0.6 and baseline_results['improvement'] > 2 and cv_results['stability'] > 0.8:
+            overall_quality = "Good"
+        elif test_results['test_score'] > 0.5 and baseline_results['improvement'] > 0:
+            overall_quality = "Fair"
+        
+        print(f"Overall pipeline quality: {overall_quality}")
+        
+        return {
+            'test_performance': test_results,
+            'baseline_comparison': baseline_results,
+            'stability': cv_results,
+            'overall_quality': overall_quality
+        }
     
     def reset(self):
         """Reset the environment for a new episode."""

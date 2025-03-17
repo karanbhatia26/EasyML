@@ -16,12 +16,10 @@ import copy
 import polars as pl
 
 def load_dataset_with_polars(dataset_name):
-    """Dataset loader using Polars for better performance."""
     print(f"Loading {dataset_name} dataset with Polars...")
     
     if (dataset_name == "adult"):
         data = fetch_openml(name='adult', version=2, as_frame=True)
-        # Convert to polars
         X = pl.from_pandas(data.data)
         y = pl.from_pandas(pd.DataFrame(data.target, columns=['target']))
     elif (dataset_name == "iris"):
@@ -34,36 +32,30 @@ def load_dataset_with_polars(dataset_name):
         y = pl.from_pandas(pd.DataFrame(data.target, columns=['target']))
     elif (dataset_name == "covtype"):
         data = fetch_covtype(as_frame=True)
-        # Convert to polars - this will be much faster with Polars
         X = pl.from_pandas(data.data)
         y = pl.from_pandas(pd.DataFrame(data.target, columns=['target']))
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
     
-    # Convert target to numeric if needed
     if (y.dtypes[0] == pl.Categorical or y.dtypes[0] == pl.Utf8):
         from sklearn.preprocessing import LabelEncoder
         le = LabelEncoder()
         y_array = le.fit_transform(y.to_pandas().values.ravel())
         y = pl.from_numpy(y_array, schema=["target"])
     
-    # Use polars' built-in train_test_split functionality
     train_mask = pl.Series([True if i < int(0.8 * X.height) else False for i in range(X.height)])
     
-    # Split X and y using the same mask
     X_train = X.filter(train_mask)
     X_test = X.filter(~train_mask)
     y_train = y.filter(train_mask)
     y_test = y.filter(~train_mask)
     
-    # Further split train into train/val
     val_mask = pl.Series([True if i >= int(0.75 * X_train.height) else False for i in range(X_train.height)])
     X_val = X_train.filter(val_mask)
     X_train = X_train.filter(~val_mask)
     y_val = y_train.filter(val_mask)
     y_train = y_train.filter(~val_mask)
     
-    # Convert back to pandas for scikit-learn compatibility
     return {
         'X_train': X_train.to_pandas(),
         'X_test': X_test.to_pandas(),
@@ -76,7 +68,6 @@ def load_dataset_with_polars(dataset_name):
     }
 
 def load_dataset(dataset_name):
-    """Generic dataset loader that works for any dataset."""
     if dataset_name == "adult":
         print("Loading Adult dataset...")
         data = fetch_openml(name='adult', version=2, as_frame=True)
@@ -88,7 +79,7 @@ def load_dataset(dataset_name):
         data = fetch_openml(name='mnist_784', version=1, as_frame=True)
     elif dataset_name == "covtype":
         print("Loading Covertype dataset...")
-        data = fetch_covtype(as_frame=True) # This one is a bit larger
+        data = fetch_covtype(as_frame=True)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
     
@@ -96,12 +87,10 @@ def load_dataset(dataset_name):
     X = data.data.copy()
     y = data.target.copy()
     
-    # Convert target to numeric if needed
     if y.dtype == 'object' or y.dtype.name == 'category':
         from sklearn.preprocessing import LabelEncoder
         y = LabelEncoder().fit_transform(y)
     
-    # Create train/val/test splits
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
@@ -110,7 +99,6 @@ def load_dataset(dataset_name):
         X_train, y_train, test_size=0.2, random_state=42
     )
     
-    # Return a dictionary
     return {
         'X_train': X_train,
         'X_test': X_test,
@@ -122,7 +110,14 @@ def load_dataset(dataset_name):
         'n_classes': len(np.unique(y))
     }
 
+def print_gpu_statistics():
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"Memory allocated: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
+        print(f"Memory cached: {torch.cuda.memory_reserved(0) / 1e9:.2f} GB")
+
 def main():
+    print_gpu_statistics()
     dataset = load_dataset("iris")
     
     env = PipelineEnvironment(dataset)
@@ -238,16 +233,14 @@ def main():
     plt.savefig("learning_curves.png")
     plt.show()
 def test_run():
-    # Change this to a more complex dataset
-    dataset = load_dataset("covtype")  # or "adult"
+    print_gpu_statistics()
+    dataset = load_dataset("covtype")
     
-    # Increase the maximum pipeline length
-    env = PipelineEnvironment(dataset, max_pipeline_length=6)  # Allow up to 6 components
+    env = PipelineEnvironment(dataset, max_pipeline_length=6)
     
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
     
-    # Create the model directory
     model_dir = "models"
     os.makedirs(model_dir, exist_ok=True)
     student_path = os.path.join(model_dir, "student_model_test.pt")
@@ -268,7 +261,6 @@ def test_run():
     student = StudentAgent(state_dim, action_dim, student_config)
     teacher = TeacherAgent(state_dim, action_dim, teacher_config)
     
-    # Try to load existing models with adaptation if needed
     if os.path.exists(student_path):
         print("Loading existing student model...")
         try:
@@ -278,14 +270,12 @@ def test_run():
             print(f"Dimension mismatch in student model: {e}")
             print("Adapting model to new dimensions...")
             
-            # Create adapted model
             adapted_model = adapt_model_to_new_dimensions(
                 student_path, 
-                state_dim,  # New input dimension
-                action_dim  # New output dimension
+                state_dim,
+                action_dim
             )
             
-            # Replace student's model with adapted version
             student.model.policy_net = adapted_model
             student.model.target_net = copy.deepcopy(adapted_model)
             print("Model successfully adapted to new dimensions")
@@ -299,14 +289,12 @@ def test_run():
             print(f"Dimension mismatch in teacher model: {e}")
             print("Adapting model to new dimensions...")
             
-            # Create adapted model
             adapted_model = adapt_model_to_new_dimensions(
                 teacher_path, 
-                state_dim,  # New input dimension
-                action_dim  # New output dimension
+                state_dim,
+                action_dim
             )
             
-            # Replace teacher's model with adapted version
             teacher.model.policy_net = adapted_model
             teacher.model.target_net = copy.deepcopy(adapted_model)
             print("Model successfully adapted to new dimensions")
@@ -314,7 +302,7 @@ def test_run():
     credit_assigner = CreditAssignment()
     component_guide = ComponentGuide()
     visualizer = PerformanceVisualizer()
-    episodes = 100
+    episodes = 10
     
     all_rewards = []
     all_performances = []
@@ -323,7 +311,6 @@ def test_run():
     
     print("Starting test run with", episodes, "episodes")
     
-    # Initialize the visualizer and contribution tracker
     collab_viz = CollaborationVisualizer()
     contribution_tracker = TeacherContributionTracker(episodes)
     
@@ -341,7 +328,6 @@ def test_run():
             teacher_action = teacher.act(state, valid_actions)
             student_action = student.act(state, valid_actions)
            
-            # Use teacher's suggestion with decreasing probability
             use_teacher = np.random.rand() < 0.3
             if use_teacher:
                 action = teacher_action
@@ -363,10 +349,8 @@ def test_run():
             episode_reward += reward
             state = next_state
             
-            # Record the interaction
             collab_viz.record_interaction(student_action, teacher_action, use_teacher, reward)
             
-            # Record for teacher contribution tracking
             contribution_tracker.record_action(
                 episode, student_action, teacher_action, use_teacher, reward)
         
@@ -384,7 +368,6 @@ def test_run():
             
             credit_assigner.update_component_credits(component_credits, performance)
         
-        # Track metrics
         all_rewards.append(episode_reward)
         all_performances.append(performance)
         
@@ -392,22 +375,18 @@ def test_run():
             best_performance = performance
             best_pipeline = pipeline_components.copy()
         
-        # Print episode summary
         print(f"Episode {episode+1} complete")
         print(f"  Total reward: {episode_reward:.4f}")
         print(f"  Performance: {performance:.4f}")
         print(f"  Pipeline: {pipeline_components}")
         
-        # Save checkpoint every 10 episodes
         if (episode + 1) % 10 == 0:
             print(f"Saving checkpoint at episode {episode+1}")
             student.save(student_path)
             teacher.save(teacher_path)
         
-        # Record episode performance
         contribution_tracker.record_episode_performance(episode, performance)
     
-    # Final save at the end of all episodes
     print("Saving final models...")
     student.save(student_path)
     teacher.save(teacher_path)
@@ -439,22 +418,15 @@ def test_run():
     plt.tight_layout()
     plt.savefig("test_learning_curves.png")
     plt.show()
-    
-    # At the end of test_run
+
     collab_viz.plot_collaboration(save_path="agent_collaboration.png")
-    
-    # At the end of test_run, print the contribution report
     contribution_tracker.print_contribution_report()
     contribution_tracker.plot_teacher_contribution(save_path="teacher_contribution_analysis.png")
 def adapt_model_to_new_dimensions(saved_model_path, new_input_dim, new_output_dim):
-    """Load a model and adapt it to new input/output dimensions."""
-    # Load the saved model state dict
-    checkpoint = torch.load(saved_model_path)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    checkpoint = torch.load(saved_model_path, map_location=device)
+    new_model = DQNetwork(new_input_dim, new_output_dim).to(device)
     
-    # Create a new model with the new dimensions
-    new_model = DQNetwork(new_input_dim, new_output_dim)
-    
-    # Copy the weights that match, ignore the rest
     old_state_dict = checkpoint['policy_net']
     new_state_dict = new_model.state_dict()
     
@@ -462,8 +434,7 @@ def adapt_model_to_new_dimensions(saved_model_path, new_input_dim, new_output_di
     for name, param in new_state_dict.items():
         if name in old_state_dict and param.shape == old_state_dict[name].shape:
             new_state_dict[name] = old_state_dict[name]
-    
-    # Load the updated state dict
+
     new_model.load_state_dict(new_state_dict)
     return new_model
 

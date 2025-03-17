@@ -16,7 +16,7 @@ class StudentAgent(BaseAgent):
             'epsilon_min': 0.1,
             'epsilon_decay': 0.995,
             'buffer_size': 10000,
-            'batch_size': 64,
+            'batch_size': 256,
             'update_freq': 10
         }
         

@@ -17,7 +17,6 @@ class PerformanceVisualizer:
         self.teacher_influence.append(1 if teacher_used else 0)
         self.pipeline_lengths.append(len(pipeline))
         
-        # Track component usage
         for component in pipeline:
             if component not in self.component_counts:
                 self.component_counts[component] = 0
@@ -28,15 +27,12 @@ class PerformanceVisualizer:
             self.best_pipelines.append(len(self.performances) - 1)
     
     def plot_learning_curves(self, window_size=10, save_path=None):
-        """Plot enhanced learning curves with moving averages"""
         plt.figure(figsize=(15, 10))
-        
-        # Smoothed rewards and performance
         smoothed_rewards = self._moving_average(self.rewards, window_size)
         smoothed_perf = self._moving_average(self.performances, window_size)
         episodes = list(range(len(self.rewards)))
         
-        # Plot rewards
+        # rewards
         plt.subplot(2, 2, 1)
         plt.plot(episodes, self.rewards, 'b-', alpha=0.3)
         plt.plot(episodes[window_size-1:], smoothed_rewards, 'b-', linewidth=2)
@@ -44,7 +40,7 @@ class PerformanceVisualizer:
         plt.xlabel('Episode')
         plt.ylabel('Reward')
         
-        # Plot performance
+        # performance
         plt.subplot(2, 2, 2)
         plt.plot(episodes, self.performances, 'r-', alpha=0.3)
         plt.plot(episodes[window_size-1:], smoothed_perf, 'r-', linewidth=2)
@@ -54,7 +50,6 @@ class PerformanceVisualizer:
         
         # Plot teacher influence over time
         plt.subplot(2, 2, 3)
-        # Moving average of teacher influence (how often teacher's advice was used)
         teacher_inf_avg = self._moving_average(self.teacher_influence, window_size)
         plt.plot(episodes[window_size-1:], teacher_inf_avg, 'g-', linewidth=2)
         plt.title('Teacher Influence (Moving Average)')
@@ -62,7 +57,6 @@ class PerformanceVisualizer:
         plt.ylabel('Teacher Advice Usage Rate')
         plt.ylim(0, 1)
         
-        # Plot top components
         plt.subplot(2, 2, 4)
         top_components = sorted(self.component_counts.items(), 
                                key=lambda x: x[1], reverse=True)[:8]
@@ -80,15 +74,12 @@ class PerformanceVisualizer:
     def plot_pipeline_evolution(self, save_path=None):
         """Visualize pipeline length and composition evolution"""
         plt.figure(figsize=(12, 8))
-        
-        # Pipeline length over time
         plt.subplot(2, 1, 1)
         plt.plot(self.pipeline_lengths, 'k-')
         plt.title('Pipeline Length Evolution')
         plt.xlabel('Episode')
         plt.ylabel('Pipeline Length')
         
-        # Highlight best performing episodes
         for best_idx in self.best_pipelines:
             plt.axvline(x=best_idx, color='r', linestyle='--', alpha=0.5)
         
@@ -129,7 +120,6 @@ class CollaborationVisualizer:
     def plot_collaboration(self, save_path=None):
         plt.figure(figsize=(15, 10))
         
-        # Plot agreement rate over time
         plt.subplot(2, 2, 1)
         window = min(20, len(self.agreement_rate))
         if window > 0:
@@ -146,8 +136,6 @@ class CollaborationVisualizer:
         plt.boxplot([self.student_reward, self.teacher_reward], labels=['Student', 'Teacher'])
         plt.title('Reward Comparison')
         plt.ylabel('Reward')
-        
-        # Show changes in the agreement rate
         plt.subplot(2, 2, 3)
         if len(self.agreement_rate) > 10:
             plt.hist(self.agreement_rate, bins=10, alpha=0.7)
@@ -155,7 +143,6 @@ class CollaborationVisualizer:
             plt.xlabel('Agreement (1=yes, 0=no)')
             plt.ylabel('Frequency')
         
-        # Show learning alignment over time
         plt.subplot(2, 2, 4)
         if len(self.student_choices) > 10 and len(self.teacher_suggestions) > 10:
             unique_actions = len(set(self.student_choices + self.teacher_suggestions))
@@ -178,7 +165,7 @@ class CollaborationVisualizer:
 class TeacherContributionTracker:
     def __init__(self, num_episodes):
         self.num_episodes = num_episodes
-        self.episode_bins = 10  # Split episodes into 10 bins
+        self.episode_bins = 10
         self.bin_size = num_episodes // self.episode_bins
         
         # Initialize counters
@@ -189,7 +176,6 @@ class TeacherContributionTracker:
         self.bin_performances = [[] for _ in range(self.episode_bins)]
         
     def record_action(self, episode, student_action, teacher_action, used_teacher, reward):
-        """Record an action decision"""
         bin_idx = min(episode // self.bin_size, self.episode_bins - 1)
         
         self.total_actions[bin_idx] += 1
@@ -200,12 +186,10 @@ class TeacherContributionTracker:
             self.student_rewards[bin_idx].append(reward)
             
     def record_episode_performance(self, episode, performance):
-        """Record an episode's final performance"""
         bin_idx = min(episode // self.bin_size, self.episode_bins - 1)
         self.bin_performances[bin_idx].append(performance)
             
     def get_contribution_stats(self):
-        """Get teacher contribution statistics"""
         contribution_rates = []
         for i in range(self.episode_bins):
             if self.total_actions[i] > 0:
@@ -234,7 +218,6 @@ class TeacherContributionTracker:
         }
         
     def print_contribution_report(self):
-        """Print a detailed report of teacher contributions"""
         stats = self.get_contribution_stats()
         
         print("\n=== Teacher Contribution Report ===")
@@ -252,7 +235,6 @@ class TeacherContributionTracker:
                   f"{stats['avg_performances'][i]:6.3f}")
                   
     def plot_teacher_contribution(self, save_path=None):
-        """Create a detailed visualization of teacher contribution"""
         stats = self.get_contribution_stats()
         bin_labels = [f"{i*self.bin_size}-{min((i+1)*self.bin_size-1, self.num_episodes-1)}" 
                      for i in range(self.episode_bins)]
@@ -267,7 +249,6 @@ class TeacherContributionTracker:
         plt.ylabel("Usage %")
         plt.xticks(rotation=45)
         
-        # Plot reward comparison
         plt.subplot(2, 2, 2)
         x = range(len(bin_labels))
         width = 0.35
@@ -279,7 +260,6 @@ class TeacherContributionTracker:
         plt.xticks(x, bin_labels, rotation=45)
         plt.legend()
         
-        # Plot performance over time with teacher usage overlay
         plt.subplot(2, 1, 2)
         ax1 = plt.gca()
         ax1.bar(bin_labels, stats["avg_performances"], alpha=0.7)

@@ -7,7 +7,6 @@ class ComponentGuide:
         self.component_performances = {}
         
     def update(self, pipeline, performance):
-        """Update transition scores based on pipeline performance"""
         if len(pipeline) < 2:
             return
             
@@ -31,7 +30,6 @@ class ComponentGuide:
             self.transition_scores[from_comp][to_comp].append(performance)
     
     def get_transition_preference(self, current_component):
-        """Return dict of next components with their average performance"""
         if current_component not in self.transition_scores:
             return {}
             
@@ -42,13 +40,11 @@ class ComponentGuide:
         return preferences
     
     def get_component_performance(self, component):
-        """Get average performance for a component"""
         if component not in self.component_performances:
             return 0.0
         return np.mean(self.component_performances[component])
         
     def suggest_next_component(self, current_component, available_components):
-        """Suggest next component based on historical performance"""
         prefs = self.get_transition_preference(current_component)
         
         # If no transitions recorded, return None
@@ -67,7 +63,6 @@ class ComponentGuide:
 
 class ComponentTransitionRules:
     def __init__(self):
-        # Define component groupings
         self.preprocessors = ["SimpleImputer", "StandardScaler", "MinMaxScaler", 
                              "RobustScaler", "MaxAbsScaler", "Normalizer"]
         
@@ -101,7 +96,6 @@ class ComponentTransitionRules:
         }
     
     def get_valid_next_components(self, current_pipeline):
-        """Get allowed next components based on current pipeline"""
         if not current_pipeline:
             current_type = "START"
         else:
@@ -115,7 +109,6 @@ class ComponentTransitionRules:
         return []
     
     def filter_valid_actions(self, current_pipeline, available_components, action_indices):
-        """Filter action indices based on transition rules"""
         if not current_pipeline:
             # For empty pipeline, all preprocessors and feature transformers are valid
             return [i for i in action_indices 
