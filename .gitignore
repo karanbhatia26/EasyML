@@ -2,7 +2,8 @@
 __pycache__/
 *.py[cod]
 venv/
-
+*.tex
+/models/
 
 .ipynb_checkpoints
 data/
@@ -39,3 +40,5 @@ lightning_logs/
 
 # Cache
 .cache/
+paper.tex
+paper2.tex
