@@ -14,6 +14,8 @@ from sklearn.datasets import fetch_openml, fetch_covtype
 from marl.models.double_dqn import DQNetwork
 import copy
 import polars as pl
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}")
 
 def load_dataset_with_polars(dataset_name):
     print(f"Loading {dataset_name} dataset with Polars...")
@@ -116,6 +118,36 @@ def print_gpu_statistics():
         print(f"Memory allocated: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
         print(f"Memory cached: {torch.cuda.memory_reserved(0) / 1e9:.2f} GB")
 
+# Create a shared environment state monitor
+class StateChangeMonitor:
+    def __init__(self, initial_dim=None):
+        self.current_dim = initial_dim
+        self.change_listeners = []
+        
+    def register_agent(self, agent):
+        self.change_listeners.append(agent)
+        
+    def check_state(self, state):
+        if state is None:
+            return
+            
+        new_dim = state.shape[0] if hasattr(state, 'shape') else len(state)
+        if self.current_dim is None:
+            self.current_dim = new_dim
+            return False
+            
+        if new_dim != self.current_dim:
+            print(f"STATE DIMENSION CHANGED: {self.current_dim} → {new_dim}")
+            self.current_dim = new_dim
+            
+            # Notify all agents
+            for agent in self.change_listeners:
+                if hasattr(agent, 'rebuild_networks'):
+                    agent.rebuild_networks(new_dim)
+            
+            return True
+        return False
+
 def main():
     print_gpu_statistics()
     dataset = load_dataset("iris")
@@ -137,12 +169,17 @@ def main():
         'epsilon_min': 0.05
     }
     
-    student = StudentAgent(state_dim, action_dim, student_config)
-    teacher = TeacherAgent(state_dim, action_dim, teacher_config)
+    student = StudentAgent(state_dim, action_dim, student_config, device = DEVICE)
+    teacher = TeacherAgent(state_dim, action_dim, teacher_config, device = DEVICE)
+    
+    # Initialize monitor
+    state_monitor = StateChangeMonitor(state_dim)
+    state_monitor.register_agent(student)
+    state_monitor.register_agent(teacher)
     
     credit_assigner = CreditAssignment()
     
-    episodes = 10
+    episodes = 20
     
     all_rewards = []
     all_performances = []
@@ -151,12 +188,20 @@ def main():
     
     for episode in range(episodes):
         state = env.reset()
+        state_monitor.check_state(state)
+
+        if state.shape[0] != state_dim:
+            print(f"State dimension changed: {state_dim} -> {state.shape[0]}")
+            state_dim = state.shape[0]
+            student = StudentAgent(state_dim, action_dim, student_config)
+            teacher = TeacherAgent(state_dim, action_dim, teacher_config)
+        
         done = False
         episode_reward = 0
         pipeline_components = []
         
         while not done:
-            valid_actions = env.get_valid_actions()
+            valid_actions = env.get_filtered_actions()
             print(f"  Valid actions: {valid_actions}")
 
             if not valid_actions:
@@ -172,6 +217,7 @@ def main():
                 continue
 
             teacher_feedback = teacher.act(state, valid_actions)
+            should_intervene = False 
             if np.random.rand() < 0.3:
                 action = teacher_feedback
                 
@@ -183,7 +229,7 @@ def main():
             
             teacher.learn(state, action, reward, next_state, done)
             
-            student.learn(state, action, reward, next_state, done)
+            student.learn(state, action, reward, next_state, done, teacher_intervened=should_intervene)
             
             episode_reward += reward
             state = next_state
@@ -196,6 +242,17 @@ def main():
                 pipeline_components, performance, evaluate_mod_pipeline)
             
             credit_assigner.update_component_credits(component_credits, performance)
+        
+        if done:
+            credits = credit_assigner.assign_marl_credit(...)
+            
+            # Adjust final rewards based on credit assignment
+            student_final_reward = performance * credits['student_credit'] 
+            teacher_final_reward = performance * credits['teacher_credit']
+            
+            # Apply these final rewards to recent experiences
+            student.apply_final_reward(student_final_reward, decay=0.95)
+            teacher.apply_final_reward(teacher_final_reward, decay=0.95)
         
         all_rewards.append(episode_reward)
         all_performances.append(performance)
@@ -232,141 +289,240 @@ def main():
     plt.tight_layout()
     plt.savefig("learning_curves.png")
     plt.show()
-def test_run():
+
+def marl_training(dataset_name="iris", episodes=20):
+    """Train ML pipeline construction using MARL approach"""
     print_gpu_statistics()
-    dataset = load_dataset("covtype")
+    dataset = load_dataset(dataset_name)
     
     env = PipelineEnvironment(dataset, max_pipeline_length=6)
     
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
     
+    # Teacher has extended state to observe student behavior
+    teacher_state_dim = state_dim + action_dim  # Add student action history
+    
     model_dir = "models"
     os.makedirs(model_dir, exist_ok=True)
-    student_path = os.path.join(model_dir, "student_model_test.pt")
-    teacher_path = os.path.join(model_dir, "teacher_model_test.pt")
+    student_path = os.path.join(model_dir, "student_model_marl_iris.pt")
+    teacher_path = os.path.join(model_dir, "teacher_model_marl_iris.pt")
     
     student_config = {
         'learning_rate': 1e-3,
         'epsilon': 1.0,
-        'epsilon_min': 0.5
+        'epsilon_min': 0.1
     }
     
     teacher_config = {
         'learning_rate': 5e-4,
-        'epsilon': 0.7,
-        'epsilon_min': 0.3
+        'epsilon': 0.7, 
+        'epsilon_min': 0.1
     }
     
     student = StudentAgent(state_dim, action_dim, student_config)
-    teacher = TeacherAgent(state_dim, action_dim, teacher_config)
+    teacher = TeacherAgent(teacher_state_dim, action_dim, teacher_config)
     
+    # Load existing models if available
     if os.path.exists(student_path):
-        print("Loading existing student model...")
         try:
             student.load(student_path)
-            print("Student model loaded successfully")
-        except RuntimeError as e:
-            print(f"Dimension mismatch in student model: {e}")
-            print("Adapting model to new dimensions...")
-            
-            adapted_model = adapt_model_to_new_dimensions(
-                student_path, 
-                state_dim,
-                action_dim
-            )
-            
-            student.model.policy_net = adapted_model
-            student.model.target_net = copy.deepcopy(adapted_model)
-            print("Model successfully adapted to new dimensions")
-
+        except:
+            print("Could not load student model - using new model")
+    
     if os.path.exists(teacher_path):
-        print("Loading existing teacher model...")
         try:
             teacher.load(teacher_path)
-            print("Teacher model loaded successfully")
-        except RuntimeError as e:
-            print(f"Dimension mismatch in teacher model: {e}")
-            print("Adapting model to new dimensions...")
+        except:
+            print("Could not load teacher model - using new model")
             
-            adapted_model = adapt_model_to_new_dimensions(
-                teacher_path, 
-                state_dim,
-                action_dim
-            )
-            
-            teacher.model.policy_net = adapted_model
-            teacher.model.target_net = copy.deepcopy(adapted_model)
-            print("Model successfully adapted to new dimensions")
-    
     credit_assigner = CreditAssignment()
-    component_guide = ComponentGuide()
     visualizer = PerformanceVisualizer()
-    episodes = 10
+    contribution_tracker = TeacherContributionTracker(episodes)
     
     all_rewards = []
     all_performances = []
     best_performance = 0
     best_pipeline = None
     
-    print("Starting test run with", episodes, "episodes")
+    # Initialize pipeline memory
+    pipeline_memory = []
+    best_pipelines = []
     
-    collab_viz = CollaborationVisualizer()
-    contribution_tracker = TeacherContributionTracker(episodes)
+    print(f"Starting MARL training with {episodes} episodes")
     
     for episode in range(episodes):
         state = env.reset()
+
+        if state.shape[0] != state_dim:
+            print(f"State dimension changed: {state_dim} -> {state.shape[0]}")
+            state_dim = state.shape[0]
+            teacher_state_dim = state_dim  # FIX: Update teacher state dimension too
+            
+            print(f"Recreating both agents with new state dimension: {state_dim}")
+            student = StudentAgent(state_dim, action_dim, student_config)
+            teacher = TeacherAgent(teacher_state_dim, action_dim, teacher_config)
+        
         done = False
         episode_reward = 0
         pipeline_components = []
-        teacher_used_this_episode = False
+        
+        # Track agent actions and interactions
+        student_actions = []
+        teacher_interventions = []
+        action_sources = []
         
         print(f"\nEpisode {episode+1}/{episodes}")
         
+        student_history = []  # Track student's recent actions
+        
+        # Initialize counter for repetitive behavior
+        repetitive_action_count = 0
+        max_repetitive_actions = 10
+        last_valid_actions = None
+        
         while not done:
-            valid_actions = env.get_valid_actions()
-            teacher_action = teacher.act(state, valid_actions)
-            student_action = student.act(state, valid_actions)
-           
-            use_teacher = np.random.rand() < 0.3
-            if use_teacher:
-                action = teacher_action
-                teacher_used_this_episode = True
+            # Get valid actions
+            valid_actions = env.get_filtered_actions()
+            
+            # Add this safety check
+            if not valid_actions:
+                print("WARNING: No valid actions available. Forcing END_PIPELINE.")
+                # Find END_PIPELINE action
+                for action, component in enumerate(env.available_components):
+                    if str(component) == "END_PIPELINE":
+                        final_action = action
+                        break
+                else:
+                    # If END_PIPELINE not found, just pick action 0
+                    print("ERROR: END_PIPELINE not found in available components!")
+                    final_action = 0
             else:
-                action = student_action
+                # Normal action selection logic
+                student_action = student.act(state, valid_actions, env=env) 
             
-            next_state, reward, done, info = env.step(action)
-            performance = info["performance"]
+            # Check for repetitive behavior
+            if valid_actions == last_valid_actions:
+                repetitive_action_count += 1
+            else:
+                repetitive_action_count = 0
             
-            component = env.available_components[action]
+            last_valid_actions = valid_actions.copy() if valid_actions else None
+            
+            # Early termination if we're in a cycle
+            if repetitive_action_count > max_repetitive_actions:
+                print("Detected action cycle - ending episode early")
+                break
+                
+            # Student selects action
+            student_action = student.act(state, valid_actions, env=env)  # Need to pass env
+            if student_action == -1:
+                print("Student returned invalid action - ending episode")
+                break
+                
+            student_history.append(student_action)
+                
+            # Teacher decides whether to intervene
+            teacher_state = env.get_teacher_state(student_history)
+            should_intervene, teacher_action = teacher.act(
+                teacher_state, valid_actions, student_action, env=env)
+            
+            # Process intervention
+            final_action, action_source = env.process_teacher_intervention(
+                student_action, should_intervene, teacher_action)
+            
+            # Take the action
+            next_state, reward, done, info = env.step(final_action)
+            
+            # Track action for credit assignment
+            student_actions.append(student_action)
+            teacher_interventions.append(should_intervene)
+            action_sources.append(action_source)
+            
+            # Add to pipeline
+            component = env.available_components[final_action]
             pipeline_components.append(component)
+            print(f"  Added {component} (from {action_source}), reward: {reward:.4f}")
             
-            print(f"  Added component: {component}, reward: {reward:.4f}")
+            # Calculate agent-specific rewards
+            student_reward = reward  # Base reward
+            teacher_reward = env.calculate_teacher_reward(
+                student_action, should_intervene, teacher_action, 
+                info.get("performance", 0))
             
-            teacher.learn(state, action, reward, next_state, done)
-            student.learn(state, action, reward, next_state, done)
+            # Store experiences
+            student.learn(state, final_action, student_reward, next_state, done)
+            teacher.learn(teacher_state, (should_intervene, teacher_action), 
+                          teacher_reward, next_state, done)
             
+            # Update trackers
             episode_reward += reward
+            contribution_tracker.record_action(
+                episode, student_action, teacher_action, 
+                should_intervene, reward)
+            
+            # Move to next state
             state = next_state
             
-            collab_viz.record_interaction(student_action, teacher_action, use_teacher, reward)
-            
-            contribution_tracker.record_action(
-                episode, student_action, teacher_action, use_teacher, reward)
+        # Episode complete
+        performance = info.get("performance", 0)
         
-        component_guide.update(pipeline_components, performance)
+        # Final reward distribution
+        if len(pipeline_components) > 1:
+            # Estimate what performance would be without teacher
+            student_only_performance = performance * 0.8  # Estimate
+            
+            # Calculate final credit assignment
+            credits = credit_assigner.assign_marl_credit(
+                pipeline_components, student_actions, teacher_interventions,
+                performance, student_only_performance)
+            
+            # Print credit assignment
+            print(f"  Credit assignment: Student {credits['student_credit']:.2f}, "
+                  f"Teacher {credits['teacher_credit']:.2f}")
+            
+            # Update component knowledge
+            teacher.update_component_knowledge(pipeline_components, performance)
+        
+        # Only for successful pipelines with multiple components
+        if len(pipeline_components) > 1 and performance > 0:
+            # Get component credits
+            component_credits = credit_assigner.assign_component_credit(
+                pipeline_components, performance, 
+                lambda pipeline: env.evaluate_with_timeout(pipeline, timeout=5))
+                
+            # Print component contributions
+            print("\nComponent contributions:")
+            for component, credit in sorted(component_credits.items(), key=lambda x: x[1], reverse=True):
+                print(f"  {component}: {credit:.3f}")
+                
+            # Convert to agent credits
+            credits = credit_assigner.translate_component_to_agent_credit(
+                component_credits, pipeline_components, action_sources)
+                
+            # Use these credits for your existing credit assignment display
+            student_credit = credits['student_credit']
+            teacher_credit = credits['teacher_credit']
+            
+            print(f"  Credit assignment: Student {student_credit:.2f}, Teacher {teacher_credit:.2f}")
+        
+        if done:
+            # Get proper credit assignment
+            credits = credit_assigner.assign_marl_credit(
+                pipeline_components, student_actions, teacher_interventions,
+                performance)
+                
+            # Apply final rewards weighted by credit
+            if len(pipeline_components) > 1:
+                student.apply_final_reward(performance * credits['student_credit'])
+                teacher.apply_final_reward(performance * credits['teacher_credit'])
+                
+            # Update environment's pipeline memory with successful pipelines
+            if performance > 0.7:
+                env._update_pipeline_memory(pipeline_components, performance)
         
         visualizer.add_episode_data(episode_reward, performance, 
-                                   pipeline_components, teacher_used_this_episode)
-        
-        if len(pipeline_components) > 1:
-            def evaluate_mod_pipeline(mod_pipeline):
-                return performance * 0.9
-            
-            component_credits = credit_assigner.ablation_credit(
-                pipeline_components, performance, evaluate_mod_pipeline)
-            
-            credit_assigner.update_component_credits(component_credits, performance)
+                                   pipeline_components, any(teacher_interventions))
         
         all_rewards.append(episode_reward)
         all_performances.append(performance)
@@ -374,54 +530,64 @@ def test_run():
         if performance > best_performance:
             best_performance = performance
             best_pipeline = pipeline_components.copy()
-        
+            
         print(f"Episode {episode+1} complete")
         print(f"  Total reward: {episode_reward:.4f}")
         print(f"  Performance: {performance:.4f}")
-        print(f"  Pipeline: {pipeline_components}")
+        print(f"  Teacher interventions: {sum(teacher_interventions)}/{len(teacher_interventions)}"
+              f" ({sum(teacher_interventions)/max(1, len(teacher_interventions)):.1%})")
         
-        if (episode + 1) % 10 == 0:
-            print(f"Saving checkpoint at episode {episode+1}")
+        # Save periodically
+        if (episode + 1) % 5 == 0:
             student.save(student_path)
             teacher.save(teacher_path)
-        
+            
         contribution_tracker.record_episode_performance(episode, performance)
+        
+        # After each episode completes:
+        if 'performance' in info and info['performance'] > 0.7:
+            # Remember successful pipelines
+            pipeline_memory.append({
+                'pipeline': env.current_pipeline.copy(),
+                'performance': info['performance'],
+                'episode': episode
+            })
+            
+            # Sort by performance
+            pipeline_memory.sort(key=lambda x: x['performance'], reverse=True)
+            
+            # Keep top 5
+            pipeline_memory = pipeline_memory[:5]
+            
+            # Print memory
+            print("Pipeline memory updated:")
+            for i, p in enumerate(pipeline_memory):
+                print(f"  #{i+1}: {[str(c) for c in p['pipeline']]} - {p['performance']:.4f}")
+        
+        # Analyze teacher interventions and adjust epsilon
+        if hasattr(teacher, 'intervention_outcomes') and len(teacher.intervention_outcomes) > 0:
+            teacher._analyze_interventions()
+            print(f"Teacher epsilon adjusted to: {teacher.config['epsilon']:.2f}")
     
-    print("Saving final models...")
+    # Save final models
     student.save(student_path)
     teacher.save(teacher_path)
     
-    print("\n=== Test Run Complete ===")
+    print("\n=== MARL Training Complete ===")
     print(f"Best performance: {best_performance:.4f}")
     print(f"Best pipeline: {best_pipeline}")
-    visualizer.plot_learning_curves(window_size=5, save_path="learning_curves_detailed.png")
-    visualizer.plot_pipeline_evolution(save_path="pipeline_evolution.png")
     
-    print("\nTop Component Transitions:")
-    for comp in component_guide.transition_scores:
-        transitions = component_guide.get_transition_preference(comp)
-        if transitions:
-            top_next = max(transitions.items(), key=lambda x: x[1])
-            print(f"  {comp} → {top_next[0]}: {top_next[1]:.4f}")
-
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(all_rewards)
-    plt.title('Episode Rewards')
-    plt.xlabel('Episode')
-    plt.ylabel('Reward')
-    plt.subplot(1, 2, 2)
-    plt.plot(all_performances)
-    plt.title('Pipeline Performance')
-    plt.xlabel('Episode')
-    plt.ylabel('Performance')
-    plt.tight_layout()
-    plt.savefig("test_learning_curves.png")
-    plt.show()
-
-    collab_viz.plot_collaboration(save_path="agent_collaboration.png")
+    # Generate visualizations
+    visualizer.plot_learning_curves(window_size=5, save_path="marl_learning_curves.png")
+    visualizer.plot_pipeline_evolution(save_path="marl_pipeline_evolution.png")
     contribution_tracker.print_contribution_report()
-    contribution_tracker.plot_teacher_contribution(save_path="teacher_contribution_analysis.png")
+    contribution_tracker.plot_teacher_contribution(save_path="marl_teacher_contribution.png")
+    
+    return env
+
+def test_run(dataset="iris", episodes=60):
+    return marl_training(dataset_name=dataset, episodes=episodes)
+
 def adapt_model_to_new_dimensions(saved_model_path, new_input_dim, new_output_dim):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     checkpoint = torch.load(saved_model_path, map_location=device)

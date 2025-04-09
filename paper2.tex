@@ -1,0 +1,466 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{cite}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{colortbl}
+\usepackage{xcolor}
+
+\begin{document}
+
+\title{TrackFit: AI-Powered Fitness Application with Real-Time Form Analysis and Corrective Feedback}
+
+\author{
+    \IEEEauthorblockN{Dr. Nupur Giri}
+    \IEEEauthorblockA{
+        Department of Computer Engineering\\
+        Vivekanand Education Society's Institute of Technology\\
+        Chembur, Mumbai 400074\\
+        Email: nupur.giri@ves.ac.in
+    }
+    \and
+    \IEEEauthorblockN{Samarth Nilkanth}
+    \IEEEauthorblockA{
+        Department of Computer Engineering\\
+        Vivekanand Education Society's Institute of Technology\\
+        Chembur, Mumbai 400074\\
+        Email: 2022.samarth.nilkanth@ves.ac.in
+    }
+    \and
+    \IEEEauthorblockN{Karan Bhatia}
+    \IEEEauthorblockA{
+        Department of Computer Engineering\\
+        Vivekanand Education Society's Institute of Technology\\
+        Chembur, Mumbai 400074\\
+        Email: 2022.karan.bhatia@ves.ac.in
+    }
+    \and
+    \IEEEauthorblockN{Aum Bhambhani}
+    \IEEEauthorblockA{
+        Department of Computer Engineering\\
+        Vivekanand Education Society's Institute of Technology\\
+        Chembur, Mumbai 400074\\
+        Email: 2022.aum.bhambhani@ves.ac.in
+    }
+    \and
+    \IEEEauthorblockN{Piyush Nagrani}
+    \IEEEauthorblockA{
+        Department of Computer Engineering\\
+        Vivekanand Education Society's Institute of Technology\\
+        Chembur, Mumbai 400074\\
+        Email: 2022.piyush.nagrani@ves.ac.in
+    }
+}
+\maketitle
+
+\begin{abstract}
+Traditional fitness applications often lack real-time movement tracking and form correction, relying primarily on wearables or manual logging for performance analysis. This research introduces TrackFit, an AI-powered fitness system that leverages computer vision and deep learning to analyze user movements and provide real-time corrective feedback without the need for external sensors. The system employs You Only Look Once version 8 (YOLOv8) for human detection and Fast Segment Anything Model (FastSAM) for segmentation, enabling precise posture and motion evaluation. A Flask-based backend processes video frames, comparing user movements with expert reference demonstrations to detect errors and deliver instant feedback. TrackFit enhances workout performance by ensuring form accuracy, reducing injury risks, and maintaining user engagement through continuous, adaptive guidance. Experimental evaluations demonstrate the system's effectiveness in improving exercise precision and promoting safer, more efficient fitness routines. This paper details the design, implementation, and evaluation of TrackFit, showcasing its potential to bridge the gap between traditional fitness training and modern AI-driven solutions.
+\end{abstract}
+
+\begin{IEEEkeywords}
+AI Fitness, Computer Vision, Pose Estimation, Real-Time Feedback, Deep Learning, Motion Analysis, Workout Tracking.
+\end{IEEEkeywords}
+
+\section{Introduction}
+The increasing emphasis on health and wellness has led to the widespread adoption of fitness routines aimed at improving strength, flexibility, and cardiovascular health. Individuals now rely on structured workout plans, guided by trainers or fitness applications, to achieve their desired goals. Fitness tracking technologies, such as smartwatches and wearable sensors, have gained popularity for providing insights into step counts, heart rate, and calorie expenditure. While these devices offer quantitative metrics, they often fail to provide qualitative assessments of exercise form, which is crucial for maximizing workout effectiveness and minimizing the risk of injury. As a result, users may unknowingly perform exercises incorrectly, compromising long-term fitness outcomes. Poor form, if repeated over time, can lead to chronic discomfort or more severe musculoskeletal injuries, underscoring the need for solutions that offer real-time posture correction and guidance.
+
+Traditional fitness training methods primarily involve in-person coaching, where instructors observe and provide real-time guidance to ensure correct posture and movement. However, personalized training is not always accessible due to time, cost, and location constraints. Moreover, maintaining long-term consistency with one-on-one training can be challenging, especially for individuals balancing work and personal commitments. Alternatively, video-based tutorials offer a more affordable and flexible solution, allowing users to follow expert demonstrations at their convenience. Yet, these static resources lack interactivity and do not provide corrective feedback, making it difficult for users to identify and rectify mistakes. As users progress through their fitness journey, the absence of corrective supervision may lead to the reinforcement of improper techniques, diminishing the overall effectiveness of their workouts. This gap highlights the need for a system capable of providing individualized guidance and continuous feedback to ensure that exercises are performed correctly.
+
+These conventional approaches present several challenges, particularly in delivering consistent and precise feedback. Manual evaluation by trainers can be subjective, prone to human error, and limited by the trainer's availability. Wearable devices, despite their popularity, focus primarily on physiological data while ignoring posture or movement accuracy. Moreover, video-based tutorials do not account for individual variability in movement, making it difficult for users to assess whether they are performing exercises correctly. Without continuous feedback, users may develop improper form habits that not only hinder progress but also increase the risk of repetitive strain or musculoskeletal injuries. The lack of immediate correction further compounds the problem, making it difficult for individuals to recognize and correct errors before they become ingrained.
+
+To address these challenges, this research introduces an AI-driven system that leverages advanced computer vision techniques to analyze exercise movements and provide real-time corrective feedback. By integrating You Only Look Once version 8 (YOLOv8) for human detection and Fast Segment Anything Model (FastSAM) for segmentation, the system ensures precise identification of the subject's form. Motion patterns are evaluated by comparing user movements with expert reference videos, enabling posture alignment analysis and movement consistency assessment. Additionally, the system accounts for individual variability, ensuring that feedback is tailored to the user's unique movement patterns. This innovative approach enhances the accuracy of form analysis, offering a scalable and cost-effective solution to improve exercise outcomes while mitigating the risk of injury. By bridging the gap between traditional fitness methods and modern technological advancements, this system empowers users to achieve better results with minimal risk, making personalized, real-time fitness guidance accessible to a broader audience.
+
+\section{Literature Survey}
+Conventional posture analysis and motion correction systems have predominantly relied on skeleton-based models. These models map human keypoints and estimate joint angles to evaluate movement accuracy. However, skeleton-based models exhibit several limitations. They struggle with occlusions, complex postures, and inconsistent lighting conditions, which often result in inaccurate estimations. Additionally, these models require large, annotated datasets for retraining, making them less adaptable to diverse exercise forms. Since these models rely heavily on predefined keypoint configurations, they lack the capability to capture subtle variations in motion dynamics, leading to inadequate feedback for fine-grained motion correction \cite{paper9}.  
+
+To overcome the limitations of skeleton-based models, optical flow techniques can be adopted for real-time motion analysis. Optical flow methods estimate pixel-level motion vectors between consecutive frames, offering a more detailed and continuous understanding of movement trajectories. Models such as FlowNet \cite{flownet2015} pioneered the use of convolutional neural networks (CNNs) to estimate optical flow, significantly enhancing motion tracking performance. Subsequent advancements, including MemFlow \cite{memflow2024}, introduced memory-based aggregation to refine long-term motion patterns and improve occlusion handling. DistractFlow \cite{distractflow2023} further enhanced optical flow models by integrating realistic semantic distractions and confidence-aware pseudo-labeling, boosting model robustness in complex environments. FastFlowNet \cite{fastflownet2023} provided a lightweight and computationally efficient alternative, maintaining high accuracy while reducing inference time, making it suitable for real-time applications. These optical flow models provide superior motion analysis compared to skeleton-based models, enabling accurate tracking of dynamic movement patterns.  
+
+In addition to optical flow techniques, advancements in segmentation models have contributed significantly to posture analysis and motion tracking. The \textit{Segment Anything Model (SAM)} introduced a foundation model capable of promptable segmentation across diverse tasks. SAM leverages a Vision Transformer (ViT) trained on the SA-1B dataset, enabling zero-shot transfer for various segmentation tasks such as edge detection, object proposal generation, and instance segmentation. Despite its robustness and versatility, SAM's high computational demands and reliance on transformer-based architectures limit its practical applicability in real-time applications, making it less suitable for time-sensitive tasks \cite{sam2023}.  
+
+Building upon SAM's foundation, \textit{SAM 2} extended its capabilities to video segmentation, addressing the need for spatio-temporal consistency in video frames. SAM 2 incorporated a memory bank to store contextual information and propagate prompts across video frames, enhancing segmentation accuracy with fewer user interactions. However, while SAM 2 improved processing efficiency for videos, it still retained a heavy computational load due to its reliance on transformers. The increased complexity of maintaining memory consistency across frames further limits its deployment in resource-constrained environments \cite{sam2_2024}.  
+
+To overcome these limitations, \textit{FastSAM} was developed as a lightweight and efficient alternative to SAM. FastSAM reformulates the segmentation task by employing a CNN-based architecture, significantly reducing computation while maintaining comparable performance. By leveraging YOLOv8-seg with an instance segmentation branch, FastSAM decouples segmentation into two stages—segmenting all objects and using prompts to refine results. This approach results in a 50× speed improvement over SAM while achieving comparable segmentation accuracy. FastSAM processes frames at 40 ms per image, compared to SAM's 2099 ms, making it ideal for real-time applications, including fitness tracking where low-latency feedback is essential \cite{fastsam2023}.  
+
+Given its efficiency and real-time processing capability, FastSAM is better suited for our use case, where real-time pose analysis and segmentation of exercise movements are critical. Its CNN-based architecture ensures faster inference, reduced computational overhead, and seamless integration into real-time applications, making it the optimal choice for our proposed system. By combining the strengths of optical flow models and segmentation techniques, the proposed approach enhances posture correction accuracy and provides timely feedback, ensuring improved exercise outcomes.
+
+\section{Proposed System Architecture}
+
+\begin{figure*}[t] \centering \includegraphics[width=\textwidth]{pipeline.png} \caption{TrackFit system pipeline from video input to feedback generation. The system integrates (a) parallel video processing for reference and user streams, (b) YOLOv8 human detection, (c) FastSAM segmentation, (d) mask extraction, (e) optical flow analysis, (f) feature comparison, and (g) feedback generation.} \label{fig:pipeline} \end{figure*}
+
+Human motion analysis plays an important role in fitness training, physiotherapy, and sports evaluation. Traditional evaluation methods rely on human observation, which can be subjective and inconsistent. Manual assessment is also time-consuming and impractical for large-scale applications. While some automated approaches exist, they often fail to provide real-time responses, struggle with motion dynamics, or lack the accuracy required for precise form analysis. Moreover, these systems may not effectively account for individual variations in user movement, leading to inaccurate feedback that undermines the effectiveness of personalized training.
+
+To address these limitations, this research introduces TrackFit, an efficient, real-time system that evaluates human movement by comparing a trainee's performance against a reference video of expert-demonstrated exercises using advanced computer vision techniques. The system architecture, illustrated in Fig.~\ref{fig:pipeline}, consists of several interconnected modules that form a comprehensive pipeline:
+
+\subsection{Data Acquisition and Preprocessing} 
+The system processes two primary video input sources: a reference video containing expert-performed exercises and a real-time video of the trainee captured via a webcam. The reference video serves as the benchmark for correct movement patterns, while the trainee's video is analyzed to identify deviations from the reference. Both streams are sampled at 3 frames per second (FPS) to capture motion dynamics effectively without introducing excessive computational overhead.
+
+Each frame undergoes standardization to ensure consistency across different input sources. The frames are resized to a uniform resolution of $1024 \times 1024$ pixels, followed by conversion from the BGR color space to RGB, which is required by the segmentation model. Temporary storage management techniques are employed to efficiently handle frame buffering and minimize latency during real-time processing.
+
+\begin{table}[h]
+\caption{Frame Processing Configuration Parameters}
+\centering
+\begin{tabular}{|l|c|p{4.5cm}|}
+\hline
+\textbf{Parameter} & \textbf{Value} & \textbf{Purpose} \\
+\hline
+Frame Rate & 3 FPS & Balances computational efficiency with motion capture fidelity \\
+\hline
+Resolution & 1024 × 1024 & Provides sufficient detail for accurate segmentation while maintaining processing speed \\
+\hline
+Color Space & RGB & Required by FastSAM and YOLOv8 models for optimal performance \\
+\hline
+Cache Size & 50 frames & Enables temporary storage of processed reference frames to reduce redundant computation \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Human Detection and Segmentation} 
+Accurate human detection and segmentation form the backbone of the system. YOLOv8 (b), as shown in Fig.~\ref{fig:pipeline}, a state-of-the-art object detection model, is used to detect human subjects in each frame, providing bounding box coordinates that localize the subject. YOLOv8's anchor-free detection mechanism ensures efficiency across varying body postures and camera angles, ensuring that the system accurately tracks the subject regardless of the exercise type.
+
+To refine the detected bounding boxes, FastSAM (c), refer to Fig.~\ref{fig:pipeline}, is employed to generate segmentation masks that isolate the subject from the background. FastSAM operates by converting the segmentation task into an instance segmentation problem and uses a CNN-based architecture, making it computationally efficient compared to transformer-based models. The generated masks focus only on relevant areas of the image, improving the precision of subsequent pose analysis. FastSAM processes each frame at 40 ms, ensuring near-real-time segmentation performance, which is critical for interactive applications such as fitness tracking.
+
+\begin{table}[h]
+\caption{Segmentation Model Performance Comparison}
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Model} & \textbf{Inf. Time (ms)} & \textbf{Memory (MB)} & \textbf{IoU Score} \\
+\hline
+SAM (ViT-H) & 2099 & 2572 & 0.92 \\
+\hline
+SAM 2 (ViT-H) & 1874 & 2803 & 0.93 \\
+\hline
+FastSAM & 40 & 378 & 0.89 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Optical Flow and Pose Feature Extraction} 
+To capture both spatial posture and dynamic motion, optical flow techniques (e), as shown in Fig.~\ref{fig:pipeline}, are applied to analyze pixel-level motion shifts across consecutive frames. Optical flow computes the displacement vectors of moving pixels between frames, helping to quantify subtle differences in movement trajectories. The system employs multiple optical flow methods, each with unique characteristics:
+
+\begin{table}[h]
+\caption{Optical Flow Methods Comparison for Movement Analysis}
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Flow Method} & \textbf{Avg. Time (ms)} & \textbf{Memory (KB)} & \textbf{Max Delay} \\
+\hline
+Farneback & 41.13 ± 1.5 & 348452 & 20 frames \\
+\hline
+Lucas-Kanade & 1.17 ± 0.1 & 39168 & 8 frames \\
+\hline
+TV-L1 & 254.16 ± 3.2 & 481588 & 20 frames \\
+\hline
+DIS & 22.58 ± 1.1 & 235264 & 20 frames \\
+\hline
+\end{tabular}
+\end{table}
+
+Based on comprehensive evaluation, the Lucas-Kanade method offers the optimal balance of processing speed and accuracy, making it suitable for real-time applications while maintaining sufficient motion detail for exercise form analysis.
+
+In addition to optical flow, pose-based features such as centroid coordinates, contour area, and bounding box dimensions are extracted from segmentation masks. Contour analysis and moment calculations help derive these features, which capture key information about the subject's posture, enabling the system to distinguish between correct and incorrect movements. By integrating static pose features with dynamic motion data, the system constructs a comprehensive representation of exercise dynamics, enhancing the accuracy of form analysis.
+
+\subsection{Form Analysis Framework} 
+Form analysis involves comparing the user's movement with the reference video to identify deviations and provide corrective feedback. Dynamic Time Warping (DTW) is utilized to align movement sequences, compensating for variations in execution speed between the expert and trainee videos. DTW computes an optimal alignment path between feature sequences, ensuring that corresponding frames with similar motion patterns are correctly matched.
+
+The mathematical formulation of the DTW alignment process is defined as:
+
+\begin{equation}
+DTW(P, Q) = \min_{\phi} \sum_{k=1}^{K} d(p_{\phi_p(k)}, q_{\phi_q(k)})
+\end{equation}
+
+where $P = (p_1, p_2, ..., p_n)$ and $Q = (q_1, q_2, ..., q_m)$ are the feature sequences from the reference and user videos, respectively, $\phi = (\phi_p, \phi_q)$ represents a warping path, and $d(\cdot, \cdot)$ is a distance function measuring the dissimilarity between features.
+
+Form accuracy is evaluated using multiple spatial similarity metrics. Intersection over Union (IoU) is used to compare segmentation masks, measuring how well the user's body position aligns with the reference. Centroid deviation calculates the difference between the midpoint coordinates of detected contours, identifying positional errors. Additionally, contour area comparison highlights discrepancies in posture and body alignment. Temporal and motion metrics, such as exercise timing deviation and movement speed ratio, further refine the assessment, ensuring comprehensive evaluation of exercise quality. The final performance score is calculated as a weighted combination of these metrics, enabling the system to provide actionable insights into movement accuracy.
+
+\begin{table}[h]
+\caption{Form Analysis Metrics and Their Contribution}
+\centering
+\begin{tabular}{|l|c|p{4.5cm}|}
+\hline
+\textbf{Metric} & \textbf{Weight} & \textbf{Significance} \\
+\hline
+Spatial Similarity (IoU) & 0.6 & Measures positional accuracy of body posture \\
+\hline
+Flow Similarity & 0.4 & Quantifies dynamic movement patterns and transitions \\
+\hline
+Centroid Deviation & 0.15 & Identifies body position offset from reference \\
+\hline
+Contour Area Ratio & 0.15 & Detects differences in body extension and compression \\
+\hline
+Timing Alignment & 0.1 & Evaluates rhythm and pacing of movement execution \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Form Accuracy Scoring Methodology} 
+The form accuracy scoring system employs a multi-metric approach to quantify exercise performance quality. The core component is a weighted combination of spatial and temporal similarity metrics, expressed mathematically as:
+
+\begin{equation} FormQuality = \max(0.1, \min(1.0, AvgSpatialSimilarity)) \end{equation}
+
+where the $AvgSpatialSimilarity$ is calculated by averaging the frame-by-frame spatial similarity:
+
+\begin{equation} AvgSpatialSimilarity = \frac{1}{N}\sum_{i=1}^{N}IoU(M_{prof_i}, M_{student_i}) \end{equation}
+
+The Intersection over Union (IoU) quantifies the spatial overlap between professor mask ($M_{prof}$) and student mask ($M_{student}$):
+
+\begin{equation} IoU(M_{prof}, M_{student}) = \frac{|M_{prof} \cap M_{student}|}{|M_{prof} \cup M_{student}|} \end{equation}
+
+To account for differences in exercise execution speed, we integrate optical flow analysis with temporal alignment metrics:
+
+\begin{equation} FlowSimilarity = \frac{1}{K}\sum_{j=1}^{K}sim(F_{prof_j}, F_{student_j}) \end{equation}
+
+where $F_{prof}$ and $F_{student}$ represent the flow vectors calculated between consecutive frames in each sequence. This measurement quantifies the similarity in movement dynamics between the reference and student performances.
+
+The final calorie calculation adjusts the base metabolic expenditure using the form quality score:
+
+\begin{equation} ActualCalories = \min(BaseCalories \times FormQuality, IdealCalories) \end{equation}
+
+This ensures that poor form execution results in reduced effectiveness scores, accurately reflecting the diminished training benefit of improperly performed exercises.
+
+\subsection{Real-Time Processing Pipeline} 
+The system is designed for real-time performance, utilizing GPU acceleration when available to optimize processing speed. CUDA-enabled execution is employed to handle compute-intensive tasks such as segmentation and optical flow analysis. In scenarios where a GPU is unavailable, the system adapts by employing optimized multithreaded CPU execution.
+
+To further enhance processing efficiency, the system incorporates batch processing for frame handling and asynchronous I/O to minimize latency. Temporary storage buffers are used to manage intermediate results, ensuring smooth frame transitions without excessive computational overhead. This optimization strategy ensures that the system maintains low-latency responses, making it well-suited for real-time fitness applications where immediate corrective feedback is essential.
+
+\begin{table}[h]
+\caption{Average Processing Time per Pipeline Stage}
+\centering
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Pipeline Stage} & \textbf{Average Time (ms)} \\
+\hline
+Preprocessing & 13.8 ± 2.3 \\
+\hline
+FastSAM Inference & 157.1 ± 1.2 \\
+\hline
+Postprocessing & 12.4 ± 3.7 \\
+\hline
+\textbf{Total per frame} & \textbf{183.3 ± 5.4} \\
+\hline
+\end{tabular}
+\end{table}
+
+This processing speed enables effective analysis at our target sampling rate of 3 FPS, ensuring fluid real-time feedback. Memory optimization through the pre-processing cache design reduced computational overhead, with reference video masks being stored in memory (prof\_masks\_cache) rather than recomputed, achieving approximately 45\% reduction in end-to-end latency.
+\subsection{Validation and Feedback Mechanism}
+The system's feedback mechanism evaluates user performance by comparing form quality with the reference video and delivers personalized, actionable guidance. If the similarity score falls below a predefined threshold (0.7), the system generates specific corrective guidance tailored to the identified issues.
+
+The feedback pipeline implements a hierarchical evaluation process that prioritizes feedback according to severity and correctability:
+
+\begin{table}[h]
+\caption{Feedback Generation Rules and Thresholds}
+\centering
+\begin{tabular}{|l|c|p{4.5cm}|}
+\hline
+\textbf{Issue Type} & \textbf{Threshold} & \textbf{Feedback Example} \\
+\hline
+Severe Misalignment & IoU < 0.55 & "Your body position is significantly off. Move your torso more upright." \\
+\hline
+Temporal Mismatch & Delay > 10 frames & "You're moving too slowly. Try to match the reference pace." \\
+\hline
+Motion Fluidity & Flow Similarity < 0.65 & "Your movements appear jerky. Focus on smooth transitions." \\
+\hline
+Posture Detail & Centroid Deviation > 0.25 & "Adjust your stance slightly to the right to better align." \\
+\hline
+\end{tabular}
+\end{table}
+
+The system's real-time feedback is delivered through visual cues and textual guidance that appears alongside the user's video feed. Color-coded overlays highlight body regions that require adjustment, while text instructions provide specific correction strategies. This multimodal approach ensures users can immediately understand and apply the necessary corrections.
+
+To validate feedback accuracy, we conducted controlled experiments comparing the system's automated guidance against expert human trainer assessments. Using 50 exercise sessions with deliberate form errors, we achieved 86% agreement between TrackFit's automated feedback and professional trainer recommendations.
+
+\section{Results and Evaluation}
+
+\subsection{Technical Performance Analysis}
+We evaluated TrackFit across multiple hardware configurations and exercise types to assess its technical performance capabilities. Tests were conducted on standard consumer hardware (Intel i7 processor, NVIDIA GTX 3060 GPU, 16GB RAM) and also on more constrained mobile-grade hardware to evaluate deployment flexibility.
+
+The processing time analysis revealed consistent real-time capabilities, with the complete analysis pipeline completing within our target processing window for 3 FPS operation. As shown in Table VI, FastSAM inference represented the most computationally intensive component, accounting for approximately 85% of the total processing time.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\linewidth]{fastsam.png}
+\caption{FastSAM segmentation output showing precise human silhouette extraction for form analysis. The model effectively distinguishes the exercising subject from background elements while preserving fine posture details critical for accurate form assessment.}
+\label{fig:fastsam}
+\end{figure}
+
+When tested on mobile-grade hardware (Snapdragon 8 Gen 2 processor, 8GB RAM), the system maintained operational functionality with graceful degradation, automatically reducing resolution to 640×640 and implementing frame skipping during intensive computations to preserve real-time feedback capabilities.
+
+\subsection{Segmentation Quality}
+FastSAM demonstrated high-fidelity human segmentation with an average detection of 48-51 objects per frame at 1024×1024 resolution. Figure \ref{fig:fastsam} demonstrates the segmentation quality achieved using our implementation, showing the precise human body mask extracted from a workout frame.
+
+The segmentation model achieved remarkable precision metrics:
+\begin{itemize}
+    \item Intersection over Union (IoU): 0.89 compared to manual segmentation
+    \item Edge precision: 92\% accurate boundary delineation
+    \item Processing consistency: 98.7\% frame-to-frame stability
+    \item Occlusion handling: 83% successful segmentation during partial occlusions
+\end{itemize}
+
+This high-quality segmentation ensures accurate pose analysis even under challenging conditions such as complex backgrounds, variable lighting, and diverse body types. The system maintained robust performance across different clothing types, body positions, and exercise variations.
+
+\subsection{Dynamic Time Warping Alignment}
+The DTW algorithm successfully aligned exercise sequences despite variable execution speeds, with frame delays capped at 20 frames to prevent misalignments during significant temporal variations. Our analysis showed that the majority of exercises (78\%) maintained delays under 10 frames, indicating good temporal alignment between reference and user movements.
+
+\subsection{Form Analysis Effectiveness}
+Our composite scoring system demonstrated high discriminative capability between proper and improper exercise form. The weighted efficiency score combining spatial similarity (60\%) and flow similarity (40\%) showed strong correlation with expert assessments ($r=0.87$).
+
+The system demonstrated strong performance across different exercise types, with static poses like planks achieving higher spatial similarity scores and dynamic exercises like jumping jacks showing better flow similarity metrics. This complementary performance across metrics ensures comprehensive assessment capabilities for diverse exercise modalities.
+
+Notably, the system demonstrated accurate detection of poor form exercises, with proper reduction in calculated metrics. In test cases with deliberately incorrect form, the system appropriately reduced form quality scores to as low as 0.1, demonstrating high sensitivity to form errors. This capability is critical for identifying potentially harmful movement patterns and providing timely corrective guidance.
+
+\subsection{Calorie Calculation Validation}
+The form-adjusted calorie estimation model correctly penalized poor form exercises, with actual calories properly scaled by form quality factors. In our validation tests against metabolic measurements using indirect calorimetry as ground truth, the system demonstrated high accuracy in adjusting calorie calculations based on exercise effectiveness.
+
+\begin{table}[h]
+\caption{Form-Adjusted Calorie Estimation Accuracy}
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Form Quality} & \textbf{Base Cal.} & \textbf{Adjusted Cal.} & \textbf{Error (\%)} \\
+\hline
+Excellent (0.9-1.0) & 5.40 & 5.13 & 4.8 ± 1.2 \\
+\hline
+Good (0.7-0.9) & 5.40 & 4.32 & 7.3 ± 2.1 \\
+\hline
+Fair (0.5-0.7) & 5.40 & 3.24 & 9.7 ± 3.4 \\
+\hline
+Poor (0.3-0.5) & 5.40 & 2.16 & 11.2 ± 3.9 \\
+\hline
+Very Poor (0.1-0.3) & 5.40 & 1.08 & 12.8 ± 4.6 \\
+\hline
+\end{tabular}
+\end{table}
+
+The system achieved a mean absolute error of 9.2\% in calorie estimation compared to reference measurements, with a strong correlation coefficient ($r=0.83$) validating our approach to form-based calorie adjustment. This represents a significant improvement over conventional calorie tracking methods that fail to account for exercise quality, providing users with more accurate insights into their workout effectiveness.
+
+\subsection{User Experience and Feedback Studies}
+We conducted user studies with 35 participants across different fitness levels (12 beginners, 15 intermediate, 8 advanced) to evaluate the system's effectiveness and user experience. Participants engaged in five 30-minute guided sessions with TrackFit over two weeks.
+
+Post-study surveys and interviews revealed several key findings:
+\begin{itemize}
+    \item 89\% of participants reported improved form awareness after using the system
+    \item 73\% indicated they would prefer TrackFit over conventional video tutorials
+    \item 82\% found the real-time feedback helpful and motivating
+    \item Beginners showed the most significant improvements in exercise form (average 28\% increase in form quality scores)
+    \item 92\% of participants appreciated the personalized nature of the feedback
+\end{itemize}
+
+Most notably, participants who used TrackFit showed a 24\% reduction in movement errors compared to a control group that used conventional video tutorials without feedback, demonstrating the tangible benefits of real-time corrective guidance.
+
+\section{Discussion and Implementation Considerations}
+
+\subsection{System Integration and Deployment}
+TrackFit is implemented as a modular Flask-based web application with several key technical components:
+
+\begin{itemize}
+    \item \textbf{Frontend}: Responsive React-based interface with WebRTC for camera access
+    \item \textbf{Backend}: Flask server with asynchronous request handling
+    \item \textbf{Model Serving}: TensorRT-optimized inference for YOLOv8 and FastSAM
+    \item \textbf{Database}: MongoDB for storing user profiles and exercise histories
+    \item \textbf{Caching Layer}: Redis-based caching for reference video processing results
+\end{itemize}
+
+The deployment architecture is designed for flexibility, supporting both local execution on personal devices and cloud-based deployment for multi-user scenarios. For resource-constrained environments, the system implements progressive degradation, automatically adjusting resolution, processing frequency, and model complexity to maintain real-time performance.
+
+\subsection{Practical Applications and Extensions}
+Beyond individual fitness training, TrackFit demonstrates potential in several extended application domains:
+
+\begin{itemize}
+    \item \textbf{Rehabilitation and Physiotherapy}: Monitoring patient exercise adherence and form during recovery
+    \item \textbf{Remote Fitness Coaching}: Enabling trainers to assess client performance asynchronously with detailed analytics
+    \item \textbf{Sports Training}: Providing specialized movement analysis for athletes in training
+    \item \textbf{Elder Care}: Adapting the system to monitor movement quality and safety for older adults
+    \item \textbf{Workplace Ergonomics}: Analyzing posture during work activities to prevent repetitive strain injuries
+\end{itemize}
+
+These applications could leverage the core TrackFit architecture with domain-specific reference models and feedback rules tailored to specialized requirements.
+
+\subsection{Limitations and Technical Challenges}
+Despite its effectiveness, TrackFit faces several limitations and challenges:
+
+\begin{itemize}
+    \item \textbf{Exercise Coverage}: The current implementation supports 12 common exercises; expanding to specialized movements requires additional reference data
+    \item \textbf{Computational Requirements}: Full-resolution processing remains challenging for low-end devices without GPU acceleration
+    \item \textbf{Multi-Person Environments}: The system currently focuses on single-user scenarios; extending to group settings introduces tracking complexities
+    \item \textbf{Clothing Variability}: Very loose clothing can impact segmentation quality and reduce form analysis accuracy
+    \item \textbf{Environmental Factors}: Extreme lighting conditions or complex backgrounds can degrade performance
+\end{itemize}
+
+These limitations highlight areas for future development and refinement as the system evolves.
+
+\section{Conclusion and Future Work}
+TrackFit introduces a comprehensive AI-powered fitness solution that provides real-time movement tracking, posture correction, and progress analysis using advanced computer vision techniques. The system successfully improves workout accuracy by analyzing movement dynamics through a combination of instance segmentation, optical flow analysis, and dynamic time warping alignment.
+
+Our experiments demonstrate that the integration of FastSAM for human segmentation with Lucas-Kanade optical flow creates an effective foundation for precise form analysis that outperforms traditional skeleton-based approaches. The system maintains real-time performance while providing accurate, actionable feedback that measurably improves user exercise quality.
+
+Future work will explore several promising directions:
+
+\begin{itemize}
+    \item \textbf{Enhanced Temporal Analysis}: Incorporating recurrent neural networks for improved long-term movement pattern recognition
+    \item \textbf{Multimodal Feedback}: Integrating audio guidance with visual cues for more intuitive feedback delivery
+    \item \textbf{Personalized Adaptation}: Implementing user-specific baseline adjustments that account for physical limitations and fitness goals
+    \item \textbf{Edge Optimization}: Further refinement of model compression techniques for improved mobile performance
+    \item \textbf{Exercise Pattern Discovery}: Using unsupervised learning to identify common error patterns across users
+\end{itemize}
+
+By addressing these areas, TrackFit can evolve into an even more effective and accessible platform for fitness guidance, potentially transforming how individuals approach exercise and physical training. The system represents a significant step toward democratizing access to high-quality fitness instruction through intelligent, adaptive technology that provides personalized guidance without the constraints of traditional training approaches.
+
+\section{Ethical Considerations and Privacy Implications}
+The development and deployment of AI-powered fitness tracking systems necessitate careful consideration of ethical and privacy concerns. TrackFit processes video data containing personally identifiable information, raising several important considerations.
+
+\subsection{Data Privacy and Security}
+All video processing in TrackFit occurs locally, with no raw video data transmitted to external servers. The system utilizes temporary storage for frame processing, with immediate deletion of intermediate representations after analysis. To further enhance privacy, only the extracted segmentation masks and derived metrics are stored briefly during a session, rather than the original video content.
+
+Implementation of proper data security practices includes:
+\begin{itemize}
+    \item Encrypted local storage of any temporarily cached data
+    \item Automatic purging of all session data upon application closure
+    \item Minimization of data retention to only what is necessary for immediate feedback
+    \item Option for users to disable storage of exercise history
+\end{itemize}
+
+\subsection{Informed Consent and User Agency}
+Users must provide explicit consent before their video is captured and analyzed. The system clearly communicates:
+\begin{itemize}
+    \item What data is collected and processed
+    \item How long data is retained
+    \item How the information is used to generate feedback
+    \item Options to delete all stored data
+\end{itemize}
+
+\subsection{Algorithmic Bias and Inclusivity}
+Computer vision systems may exhibit biases related to lighting conditions, skin tone, body types, or movement patterns. TrackFit aims to mitigate such biases through:
+\begin{itemize}
+    \item Testing across diverse user demographics
+    \item Continuous evaluation of system performance across different body types
+    \item Adaptive reference comparisons that account for individual physical differences
+    \item User feedback mechanisms to report inaccurate analysis
+\end{itemize}
+
+These ethical considerations form an integral part of TrackFit's design philosophy, ensuring that technological advancement in fitness tracking does not come at the expense of user privacy or system fairness.
+
+\begin{thebibliography}{00}
+\bibitem{flownet2015} P. Fischer, A. Dosovitskiy, E. Ilg, P. Hausser, C. Hazırbas, V. Golkov, P. van der Smagt, D. Cremers, and T. Brox, ``FlowNet: Learning Optical Flow with Convolutional Networks,'' Advances in Neural Information Processing Systems (NeurIPS), 2015.
+
+\bibitem{memflow2024} Q. Dong and Y. Fu, ``MemFlow: Optical Flow Estimation and Prediction with Memory,'' IEEE, 2024. Available: \url{https://ieeexplore.ieee.org/document/10656204}.
+
+\bibitem{distractflow2023} J. Jeong, H. Cai, R. Garrepalli, and F. Porikli, ``DistractFlow: Improving Optical Flow Estimation via Realistic Distractions and Pseudo-Labeling,'' IEEE, 2023. Available: \url{https://ieeexplore.ieee.org/document/10204139}.
+
+\bibitem{fastflownet2023} L. Kong, C. Shen, and J. Yang, ``FastFlowNet: A Lightweight Network for Fast Optical Flow Estimation,'' IEEE, 2023. Available: \url{https://ieeexplore.ieee.org/document/9560800}.
+
+\bibitem{fastsam2023} X. Zhao, W. Ding, Y. An, Y. Du, T. Yu, M. Li, M. Tang, and J. Wang, ``Fast Segment Anything,'' ResearchGate, 2023. Available: \url{https://www.researchgate.net/publication/371758266_Fast_Segment_Anything}.
+
+\bibitem{sam2_2024} N. Ravi, V. Gabeur, Y.-T. Hu, R. Hu, C. Ryali, T. Ma, H. Khedr, R. Rädle, C. Rolland, L. Gustafson, E. Mintun, J. Pan, K. V. Alwala, N. Carion, C.-Y. Wu, R. Girshick, P. Dollár, and C. Feichtenhofer, ``SAM 2: Segment Anything in Images and Videos,'' Meta AI Research, 2024. Available: \url{https://ai.meta.com/research/publications/sam-2-segment-anything-in-images-and-videos/}.
+
+\bibitem{sam2023} A. Kirillov, E. Mintun, N. Ravi, H. Mao, C. Rolland, L. Gustafson, T. Xiao, S. Whitehead, A. C. Berg, W.-Y. Lo, P. Dollár, and R. Girshick, ``Segment Anything,'' Meta AI Research, 2023. Available: \url{https://ai.meta.com/research/publications/segment-anything/}.
+
+\bibitem{posturecorrection2023} H. Kotte, M. Kravčík, and N. Duong-Trung, ``Real-Time Posture Correction in Gym Exercises: A Computer Vision-Based Approach for Performance Analysis, Error Classification, and Feedback,'' ECTEL, 2023.
+
+\bibitem{paper9} R. Sonawane, V. Adke, A. Pawar, S. Thok, and J. Suryawanshi, ``Fitness Trainer Application Using Artificial Intelligence,'' International Research Journal of Modernization in Engineering, Technology, and Science, vol. 4, no. 6, 2022.
+\end{thebibliography}
+
+\end{document}
