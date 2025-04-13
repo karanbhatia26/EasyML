@@ -61,6 +61,7 @@ class PipelineEnvironment(gym.Env):
         self.last_performance = 0.0
         
         self.transition_rules = ComponentTransitionRules()
+        self.fixed_state_dim = None
         
     def _default_components(self):
         """Define default available components if none provided."""
@@ -179,7 +180,21 @@ class PipelineEnvironment(gym.Env):
         # Ensure we don't exceed 10 features
         data_chars = data_chars[:10]
         
-        return np.concatenate([pipeline_state, np.array(data_chars)])
+        # Calculate raw state as before
+        raw_state = np.concatenate([pipeline_state, np.array(data_chars)])
+        
+        # NEW: Ensure consistent dimensions throughout episode
+        if hasattr(self, 'fixed_state_dim') and self.fixed_state_dim is not None:
+            current_dim = len(raw_state)
+            if current_dim != self.fixed_state_dim:
+                if current_dim < self.fixed_state_dim:
+                    # Pad shorter state with zeros
+                    raw_state = np.pad(raw_state, (0, self.fixed_state_dim - current_dim))
+                else:
+                    # Truncate longer state
+                    raw_state = raw_state[:self.fixed_state_dim]
+        
+        return raw_state
         
     def _evaluate_pipeline(self, pipeline=None):
         """Evaluate the current pipeline with better error handling."""
@@ -426,10 +441,19 @@ class PipelineEnvironment(gym.Env):
         }
     
     def reset(self):
-        """Reset the environment for a new episode."""
+        """Reset the environment for a new episode with dimension stability."""
         self.current_pipeline = []
         self.last_performance = 0.0
-        return self._get_state_representation()
+        
+        # Get initial state representation
+        state = self._get_state_representation()
+        
+        # Store the initial dimension to maintain consistency throughout the episode
+        if self.fixed_state_dim is None:
+            self.fixed_state_dim = len(state)
+            print(f"Environment initialized with fixed state dimension: {self.fixed_state_dim}")
+        
+        return state
     
     def step(self, action):
         """Take an action and return the next state, reward, done flag, and info"""
@@ -639,6 +663,26 @@ class PipelineEnvironment(gym.Env):
     def _is_compatible_with_pipeline(self, component_name):
         if not self.current_pipeline:
             return True
+            
+        # Don't check "pipeline lacks classifier" for intermediate components
+        # Only check for classifier presence if adding END_PIPELINE
+        if component_name == 'END_PIPELINE':
+            has_classifier = any(model_name in ' '.join(self.current_pipeline) 
+                             for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier',
+                                               'GradientBoostingClassifier', 'KNeighborsClassifier'])
+            if not has_classifier:
+                print(f"Incompatible: Cannot end pipeline without a classifier")
+                return False
+                
+        # Check if previous component is a classifier (can't add after a classifier)
+        prev_is_classifier = any(clf in self.current_pipeline[-1] 
+                          for clf in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier',
+                                     'GradientBoostingClassifier', 'KNeighborsClassifier'])
+        if prev_is_classifier and component_name != 'END_PIPELINE':
+            print(f"Incompatible: Cannot add {component_name} after a classifier")
+            return False
+
+        # Rest of your compatibility checks remain the same
         feature_extractors = ['PCA', 'TruncatedSVD', 'SelectKBest']
         encoders = ['OneHotEncoder', 'OrdinalEncoder']
         scalers = ['StandardScaler', 'MinMaxScaler', 'MaxAbsScaler', 'RobustScaler', 'Normalizer']
@@ -691,6 +735,25 @@ class PipelineEnvironment(gym.Env):
             if n_components > max_features:
                 print(f"Invalid: PCA n_components={n_components} exceeds max of {max_features}")
                 return False
+
+        # Enhanced redundancy check - count component types
+        imputer_count = sum(1 for c in self.current_pipeline if 'SimpleImputer' in c)
+        scaler_count = sum(1 for c in self.current_pipeline 
+                      if any(x in c for x in ['Scaler', 'Normalizer', 'MinMax', 'MaxAbs', 'Robust']))
+        selector_count = sum(1 for c in self.current_pipeline 
+                        if any(x in c for x in ['Select', 'PCA', 'SVD']))
+    
+        # Limit component repetition
+        if 'SimpleImputer' in component_name and imputer_count >= 1:
+            print(f"Redundant: Pipeline already has {imputer_count} imputers")
+            return False
+        if any(x in component_name for x in ['Scaler', 'Normalizer', 'MinMax', 'MaxAbs', 'Robust']) and scaler_count >= 1:
+            print(f"Redundant: Pipeline already has {scaler_count} scalers")
+            return False
+        if any(x in component_name for x in ['Select', 'PCA', 'SVD']) and selector_count >= 1:
+            print(f"Redundant: Pipeline already has {selector_count} feature selectors")
+            return False
+
         return True
 
     def get_teacher_state(self, student_history=None):
@@ -732,30 +795,21 @@ class PipelineEnvironment(gym.Env):
         else:
             return student_action, "student"
             
-    def calculate_teacher_reward(self, student_action, should_intervene, teacher_action, 
-                               performance, final_reward=None):
-        """
-        Calculate reward for teacher
-        
-        Args:
-            student_action: What student would have done
-            should_intervene: Whether teacher intervened
-            teacher_action: Teacher's suggestion
-            performance: Achieved performance
-            final_reward: Final reward after pipeline completion
-            
-        Returns:
-            Teacher's reward
-        """
+    def calculate_teacher_reward(self, student_action, should_intervene, teacher_action, performance):
+        """More balanced teacher reward function"""
+        # Non-intervention baseline reward
         if not should_intervene:
             return 0.01
-            
-        if final_reward is not None:
-            if performance > 0.7:
-                return final_reward * 1.2
-            return final_reward
-            
-        return -0.02
+        
+        # Compare actions to see if teacher made better choice
+        if performance > 0:  # Successful intervention
+            return performance * 0.2  # Share of performance
+        elif student_action == teacher_action:
+            # Teacher agreed with student but intervention was unnecessary
+            return -0.05
+        else:
+            # Teacher intervention that didn't improve or worsen situation
+            return -0.01  # Smaller penalty
 
     def _evaluate_pipeline_performance(self, pipeline):
         """Evaluate pipeline with Windows-compatible timeout protection"""
@@ -833,21 +887,54 @@ class PipelineEnvironment(gym.Env):
         
         return result[0]
 
-    def evaluate_with_timeout(self, pipeline, timeout=60):
-        """Evaluate pipeline with timeout protection (Windows compatible)"""
-        import threading
-        import time
-        
-        result = [None]
-        error = [None]
-        completed = [False]
+    def evaluate_with_timeout(self, pipeline, timeout=30):
+        """Evaluate pipeline with Windows-compatible timeout protection"""
+        result = [0.0]
+        error_occurred = [False]
         
         def evaluation_thread():
             try:
-                result[0] = self._evaluate_pipeline_performance(pipeline)
-                completed[0] = True
+                # Remove END_PIPELINE token if present
+                pipeline_components = [comp for comp in pipeline if comp != "END_PIPELINE"]
+                
+                if not pipeline_components or not any(model_name in pipeline_components[-1] 
+                        for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
+                                         'GradientBoostingClassifier', 'KNeighborsClassifier']):
+                    print("Pipeline evaluation skipped: Pipeline must end with a classifier")
+                    result[0] = 0.0
+                    return
+                    
+                from sklearn.base import clone
+                from sklearn.pipeline import Pipeline as SklearnPipeline
+                    
+                steps = []
+                for i, component_str in enumerate(pipeline_components):
+                    if component_str == "END_PIPELINE":
+                        continue
+                            
+                    if component_str not in COMPONENT_MAP:
+                        print(f"Pipeline evaluation failed: Component not found: {component_str}")
+                        result[0] = 0.0
+                        return
+                        
+                    component = clone(COMPONENT_MAP[component_str])
+                    steps.append((f'step_{i}', component))
+                    
+                try:
+                    pipeline_obj = SklearnPipeline(steps)
+                    pipeline_obj.fit(self.X_train, self.y_train)
+                    result[0] = pipeline_obj.score(self.X_val, self.y_val)
+                except Exception as inner_e:
+                    print(f"Inner pipeline evaluation error: {str(inner_e)}")
+                    result[0] = 0.0
+                    
             except Exception as e:
-                error[0] = e
+                print(f"Pipeline evaluation error: {str(e)}")
+                error_occurred[0] = True
+                result[0] = 0.0
+        
+        import threading
+        import time
         
         thread = threading.Thread(target=evaluation_thread)
         thread.daemon = True
@@ -855,27 +942,12 @@ class PipelineEnvironment(gym.Env):
         
         start_time = time.time()
         while thread.is_alive() and time.time() - start_time < timeout:
-            thread.join(0.5)
+            thread.join(0.5)  # Allow interruption every 0.5 seconds
         
         if thread.is_alive():
             print(f"Pipeline evaluation timed out after {timeout} seconds")
-            
-            if len(pipeline) >= 2:
-                last_comp = str(pipeline[-2]) if len(pipeline) >= 2 else ""
-                this_comp = str(pipeline[-1])
-                bad_pair = (last_comp, this_comp)
-                
-                if not hasattr(self, 'bad_combinations'):
-                    self.bad_combinations = set()
-                self.bad_combinations.add(bad_pair)
-                print(f"Added bad combination to avoid list: {bad_pair}")
-                
             return 0.0
-            
-        if error[0]:
-            print(f"Pipeline evaluation error: {error[0]}")
-            return 0.0
-            
+        
         return result[0]
 
     def evaluate_with_timeout(self, pipeline):
@@ -973,19 +1045,61 @@ class PipelineEnvironment(gym.Env):
         return result[0]
 
     def _update_pipeline_memory(self, pipeline, performance):
-        """Store successful pipelines in memory"""
+        """Store successful pipelines in memory with complexity and diversity preservation"""
         if not hasattr(self, 'pipeline_memory'):
             self.pipeline_memory = []
         
+        # Skip if this pipeline is almost identical to one we already have
+        for existing in self.pipeline_memory:
+            # Convert both to sets of components for comparison (ignoring END_PIPELINE)
+            existing_components = set(comp for comp in existing['components'] if comp != "END_PIPELINE")
+            current_components = set(comp for comp in pipeline if comp != "END_PIPELINE")
+            
+            # If very similar pipeline exists with similar performance
+            overlap = len(existing_components.intersection(current_components))
+            if overlap > 0:
+                # If one is just a subset of the other with similar performance
+                if (existing_components.issubset(current_components) or 
+                    current_components.issubset(existing_components)):
+                    perf_diff = abs(existing['performance'] - performance)
+                    # Only replace if the new one has significantly better performance
+                    if perf_diff < 0.02:  # Less than 2% difference
+                        # Keep the more complex pipeline
+                        if len(current_components) > len(existing_components):
+                            print(f"Replacing simpler pipeline with more complex one")
+                            existing['components'] = pipeline.copy()
+                            existing['performance'] = performance
+                        return
+        
+        # Calculate pipeline complexity score - reward diversity in component types
+        def get_complexity_score(pl):
+            components = [c for c in pl if c != "END_PIPELINE"]
+            # Count unique component types
+            has_imputer = any('Imputer' in c for c in components)
+            has_scaler = any(any(x in c for x in ['Scaler', 'Normalizer', 'MinMax']) for c in components)
+            has_feature_sel = any(any(x in c for x in ['SelectK', 'SelectPercentile']) for c in components)
+            has_dim_red = any(any(x in c for x in ['PCA', 'SVD']) for c in components)
+            has_clf = any(any(x in c for x in ['Classifier', 'Regression', 'KNeighbors']) for c in components)
+            # Score - both performance and component diversity matter
+            component_diversity = has_imputer + has_scaler + has_feature_sel + has_dim_red + has_clf
+            return component_diversity
+        
         pipeline_entry = {
             'components': pipeline.copy(),  
-            'performance': performance
+            'performance': performance,
+            'complexity': get_complexity_score(pipeline)
         }
         
+        # Add to memory
         self.pipeline_memory.append(pipeline_entry)
-        self.pipeline_memory = self.pipeline_memory[:5]
         
-        components_str = [c for c in pipeline if c != "END_PIPELINE"]
+        # Sort pipeline memory by performance
+        self.pipeline_memory = sorted(
+            self.pipeline_memory, 
+            key=lambda x: (x['performance'], x['complexity']), 
+            reverse=True
+        )[:5]  # Keep top 5 high-performance, complex pipelines
+        
         print("Pipeline memory updated:")
         for i, entry in enumerate(self.pipeline_memory, 1):
             components = [c for c in entry['components'] if c != "END_PIPELINE"]
@@ -1088,14 +1202,11 @@ class PipelineEnvironment(gym.Env):
         return estimated_memory_gb
 
     def is_valid_pipeline(self, pipeline):
-        """Check if a pipeline is valid before evaluation"""
-        # Skip empty pipelines
         if not pipeline:
             return True
             
-        # Check for memory requirements
         memory_estimate = self.estimate_memory_requirement(pipeline)
-        if memory_estimate > 10.0:  # 10GB threshold
+        if memory_estimate > 10.0:
             print(f"Pipeline memory requirement too high: ~{memory_estimate:.1f} GB")
             return False
         
@@ -1123,23 +1234,18 @@ def is_classifier(component_name):
     return any(clf in component_name for clf in classifier_names)
 
 def pipeline_is_incompatible(pipeline):
-    """Check for multiple incompatibility cases in a pipeline."""
-    # Skip empty pipelines
     if not pipeline:
         return False
         
-    # Categorize components by type
     classifiers = []
     reducers = []
     scalers = []
     encoders = []
     imputers = []
     
-    # Track component types in pipeline
     for i, component in enumerate(pipeline):
         component_str = str(component)
         
-        # Classify components
         if any(c in component_str for c in ["Classifier", "Regressor", "SVC", "LogisticRegression", "RandomForest", "GradientBoosting", "KNeighbors"]):
             classifiers.append((i, component_str))
         if any(c in component_str for c in ["PCA", "TruncatedSVD", "SelectKBest", "SelectPercentile", "VarianceThreshold"]):
@@ -1151,57 +1257,45 @@ def pipeline_is_incompatible(pipeline):
         if "Imputer" in component_str:
             imputers.append((i, component_str))
     
-    # Case 1: Encoder after dimensionality reduction
     for encoder_idx, _ in encoders:
         if any(reducer_idx < encoder_idx for reducer_idx, _ in reducers):
             return f"Incompatible: Cannot apply encoding after dimension reduction"
     
-    # Case 2: Multiple classifiers before end
     if len(classifiers) > 1:
-        if classifiers[-1][0] != len(pipeline) - 1:  # Last classifier not at end
+        if classifiers[-1][0] != len(pipeline) - 1:
             return f"Incompatible: Multiple classifiers in pipeline"
     
-    # Case 3: Dimensionality reduction applied multiple times
     if len(reducers) > 1:
-        # Check if reducers are consecutive (which might be intentional)
         consecutive = all(reducers[i+1][0] - reducers[i][0] == 1 for i in range(len(reducers)-1))
         if not consecutive:
             return f"Incompatible: Non-sequential dimension reduction"
     
-    # Case 4: Scaling after dimensionality reduction
     for scaler_idx, _ in scalers:
         if any(reducer_idx < scaler_idx for reducer_idx, _ in reducers):
             return f"Incompatible: Scaling should be applied before dimension reduction"
     
-    # Case 5: Classifier before preprocessing
-    for classifier_idx, _ in classifiers[:-1]:  # All but last classifier
+    for classifier_idx, _ in classifiers[:-1]:
         if any(component_idx > classifier_idx for component_type in [scalers, encoders, imputers, reducers] 
                for component_idx, _ in component_type):
             return f"Incompatible: Preprocessing after classifier"
     
-    # Case 6: Redundant components - exact duplicate consecutive components
     for i in range(len(pipeline) - 1):
         if str(pipeline[i]) == str(pipeline[i + 1]):
             return f"Redundant: Pipeline contains consecutive duplicate components"
     
-    # Case 7: Feature selection after dimension reduction
     for i, component in enumerate(pipeline):
         if any(s in str(component) for s in ["SelectKBest", "SelectPercentile"]):
             if any("PCA" in str(c) or "TruncatedSVD" in str(c) for c in pipeline[:i]):
                 return f"Incompatible: Feature selection after dimension reduction"
     
-    # Case 8: Imputation after encoding
     for imputer_idx, _ in imputers:
         if any(encoder_idx < imputer_idx for encoder_idx, _ in encoders):
             return f"Incompatible: Imputation should be done before encoding"
     
-    # Case 9: Multiple normalization techniques
     if len(scalers) > 1:
         scaler_names = [name for _, name in scalers]
         if any("StandardScaler" in s for s in scaler_names) and any("MinMaxScaler" in s for s in scaler_names):
             return f"Incompatible: Using both StandardScaler and MinMaxScaler"
-    
-    # Case 10: Missing classifier at end of pipeline
     if "END_PIPELINE" not in str(pipeline[-1]) and not classifiers:
         return f"Incompatible: Pipeline lacks classifier component"
         

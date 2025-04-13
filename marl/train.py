@@ -585,7 +585,7 @@ def marl_training(dataset_name="iris", episodes=20):
     
     return env
 
-def test_run(dataset="iris", episodes=60):
+def test_run(dataset="adult", episodes=25):
     return marl_training(dataset_name=dataset, episodes=episodes)
 
 def adapt_model_to_new_dimensions(saved_model_path, new_input_dim, new_output_dim):
