@@ -49,3 +49,39 @@ class PipelineStateRepresentation:
             std = np.sqrt(perf["variance"] / perf["count"]) if perf["count"] > 1 else float('inf')
             return mean, std
         return 0.0, float('inf')
+class StatePreprocessor:
+    def __init__(self, fixed_dim=None, max_dim=100):
+        self.fixed_dim = fixed_dim
+        self.max_dim = max_dim
+    
+    def preprocess(self, state, preserve_batch=False):
+        """Process state to fixed dimensions regardless of source"""
+        if state is None:
+            return None
+            
+        if preserve_batch and len(state.shape) > 1:
+            # Handle batch of states
+            batch_size = state.shape[0]
+            processed_batch = []
+            for i in range(batch_size):
+                processed_batch.append(self._process_single_state(state[i]))
+            return np.array(processed_batch)
+        else:
+            return self._process_single_state(state)
+    
+    def _process_single_state(self, state):
+        """Process a single state to fixed dimensions"""
+        if not isinstance(state, np.ndarray):
+            state = np.array(state)
+            
+        state_dim = state.shape[0] if len(state.shape) > 0 else 1
+        target_dim = self.fixed_dim or min(state_dim, self.max_dim)
+        
+        if state_dim == target_dim:
+            return state
+        elif state_dim < target_dim:
+            # Pad with zeros
+            return np.pad(state, (0, target_dim - state_dim))
+        else:
+            # Truncate
+            return state[:target_dim]

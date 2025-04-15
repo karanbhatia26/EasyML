@@ -271,8 +271,8 @@ def main():
     print(f"Best performance: {best_performance:.4f}")
     print(f"Best pipeline: {best_pipeline}")
     os.makedirs("models", exist_ok=True)
-    student.save("models/student_model.pt")
-    teacher.save("models/teacher_model.pt")
+    student.save(f"models/{dataset}.pt")
+    teacher.save(f"models/{dataset}.pt")
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     plt.plot(all_rewards)
@@ -305,8 +305,8 @@ def marl_training(dataset_name="iris", episodes=20):
     
     model_dir = "models"
     os.makedirs(model_dir, exist_ok=True)
-    student_path = os.path.join(model_dir, "student_model_marl_iris.pt")
-    teacher_path = os.path.join(model_dir, "teacher_model_marl_iris.pt")
+    student_path = os.path.join(model_dir, f"student_model_marl_{dataset_name}.pt")
+    teacher_path = os.path.join(model_dir, f"teacher_model_marl_{dataset_name}.pt")
     
     student_config = {
         'learning_rate': 1e-3,
@@ -315,9 +315,11 @@ def marl_training(dataset_name="iris", episodes=20):
     }
     
     teacher_config = {
-        'learning_rate': 5e-4,
-        'epsilon': 0.7, 
-        'epsilon_min': 0.1
+        'learning_rate': 1e-4, 
+        'gamma': 0.99,
+        'epsilon': 0.3,
+        'intervention_decay': True,  # Enable intervention decay
+        'batch_size': 32
     }
     
     student = StudentAgent(state_dim, action_dim, student_config)
@@ -582,10 +584,13 @@ def marl_training(dataset_name="iris", episodes=20):
     visualizer.plot_pipeline_evolution(save_path="marl_pipeline_evolution.png")
     contribution_tracker.print_contribution_report()
     contribution_tracker.plot_teacher_contribution(save_path="marl_teacher_contribution.png")
+    env.print_pipeline_statistics()
+    
+    plot_intervention_rate(teacher)
     
     return env
 
-def test_run(dataset="adult", episodes=25):
+def test_run(dataset="adult", episodes=500):
     return marl_training(dataset_name=dataset, episodes=episodes)
 
 def adapt_model_to_new_dimensions(saved_model_path, new_input_dim, new_output_dim):
@@ -603,6 +608,34 @@ def adapt_model_to_new_dimensions(saved_model_path, new_input_dim, new_output_di
 
     new_model.load_state_dict(new_state_dict)
     return new_model
+
+def plot_intervention_rate(teacher):
+    """Plot teacher intervention rate over episodes"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    # Extract data from intervention history
+    episodes = [x[0] for x in teacher.intervention_history]
+    interventions = [1 if x[1] else 0 for x in teacher.intervention_history]
+    
+    # Calculate moving average
+    window = 50
+    smoothed = []
+    for i in range(len(episodes)):
+        start_idx = max(0, i - window + 1)
+        smoothed.append(sum(interventions[start_idx:i+1]) / (i - start_idx + 1))
+    
+    plt.figure(figsize=(10, 5))
+    plt.plot(episodes, interventions, 'o', alpha=0.3, label='Interventions')
+    plt.plot(episodes, smoothed, 'r-', label=f'Moving Average (window={window})')
+    plt.xlabel('Episode')
+    plt.ylabel('Intervention Rate')
+    plt.title('Teacher Intervention Over Training')
+    plt.legend()
+    plt.ylim(-0.1, 1.1)
+    plt.grid(True, alpha=0.3)
+    plt.savefig("intervention_rate.png")
+    plt.close()
 
 if __name__ == "__main__":
     test_run()

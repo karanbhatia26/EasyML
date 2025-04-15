@@ -8,39 +8,22 @@ Experience = namedtuple('Experience',
 
 class ReplayBuffer:
     def __init__(self, capacity, parent_model=None):
-        self.memory = deque(maxlen=capacity)
-        self.parent_model = parent_model  # Add reference to parent model
+        self.capacity = capacity
+        self.memory = deque([], maxlen=capacity)
+        self.parent_model = parent_model
+        # Check if parent_model exists and has state_processor attribute
+        self.state_processor = parent_model.state_processor if (parent_model and hasattr(parent_model, 'state_processor')) else None
         
-    def push(self, *args):
+    def push(self, state, action, reward, next_state, done):
         """Store transition in replay buffer with dimension change detection"""
-        # Extract the state and next_state from args (follows Experience namedtuple order)
-        state, action, reward, next_state, done = args
+        # Process states if processor exists
+        if self.state_processor:
+            state = self.state_processor.preprocess(state)
+            next_state = self.state_processor.preprocess(next_state)
         
-        # Check if state dimensions have changed
-        if state is not None and next_state is not None and len(self.memory) > 0:
-            prev_state = self.memory[0].state
-            
-            # Handle numpy arrays or torch tensors
-            if hasattr(prev_state, 'shape') and hasattr(state, 'shape'):
-                if prev_state.shape != state.shape:
-                    print(f"State dimension changed from {prev_state.shape} to {state.shape}")
-                    self.memory.clear()
-                    # Notify parent model if available
-                    if self.parent_model and hasattr(self.parent_model, 'rebuild_networks'):
-                        new_dim = state.shape[0] if len(state.shape) > 0 else 1
-                        self.parent_model.rebuild_networks(new_dim)
-            
-            # Handle lists or other sequence types
-            elif hasattr(prev_state, '__len__') and hasattr(state, '__len__'):
-                if len(prev_state) != len(state):
-                    print(f"State dimension changed from {len(prev_state)} to {len(state)}")
-                    self.memory.clear()
-                    # Notify parent model if available
-                    if self.parent_model and hasattr(self.parent_model, 'rebuild_networks'):
-                        self.parent_model.rebuild_networks(len(state))
-        
-        # Store the experience
-        self.memory.append(Experience(*args))
+        # Store the experience (without dimension checks since preprocessor handles it)
+        experience = Experience(state, action, reward, next_state, done)
+        self.memory.append(experience)
         
     def sample(self, batch_size):
         return random.sample(self.memory, batch_size)

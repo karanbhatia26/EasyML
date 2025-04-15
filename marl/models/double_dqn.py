@@ -4,6 +4,7 @@ from ..utils.buffer import ReplayBuffer, Experience
 from .networks import DQNetwork
 import random
 import numpy as np
+from ..utils.state_representation import StatePreprocessor
 
 class DoubleDQN:
     def __init__(self, state_dim, action_dim, lr=1e-4, gamma=0.99, 
@@ -29,10 +30,17 @@ class DoubleDQN:
         
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.loss_fn = nn.MSELoss()
+        
+        # Create state processor BEFORE buffer
+        self.state_processor = StatePreprocessor(fixed_dim=state_dim)
+        
+        # Now create buffer
         self.buffer = ReplayBuffer(buffer_size, parent_model=self)
+        
         self.batch_size = batch_size
         self.update_counter = 0
         self.update_freq = update_freq
+
         
     def select_action(self, state, valid_actions=None):
         if valid_actions is None or len(valid_actions) == 0:
@@ -40,7 +48,8 @@ class DoubleDQN:
             
         if random.random() > self.epsilon:
             with torch.no_grad():
-                state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+                processed_state = self.state_processor.preprocess(state)
+                state_tensor = torch.FloatTensor(processed_state).unsqueeze(0).to(self.device)
                 q_values = self.policy_net(state_tensor)
                 
                 if valid_actions:
@@ -63,10 +72,10 @@ class DoubleDQN:
         batch = self.buffer.sample(self.batch_size)
         
         # First convert to numpy arrays (more efficient)
-        states_array = np.array([exp.state for exp in batch])
+        states_array = np.array([self.state_processor.preprocess(exp.state) for exp in batch])
         actions_array = np.array([exp.action for exp in batch])
         rewards_array = np.array([exp.reward for exp in batch])
-        next_states_array = np.array([exp.next_state for exp in batch])
+        next_states_array = np.array([self.state_processor.preprocess(exp.next_state) for exp in batch])
         dones_array = np.array([exp.done for exp in batch])
         
         # Convert to tensors
@@ -75,10 +84,6 @@ class DoubleDQN:
         rewards = torch.FloatTensor(rewards_array).to(self.device)
         next_states = torch.FloatTensor(next_states_array).to(self.device)
         dones = torch.BoolTensor(dones_array).to(self.device)
-        
-        # Check if networks need rebuilding
-        if self.rebuild_networks_if_needed(states):
-            return  # Skip this update cycle
         
         # Continue with normal DQN update
         curr_q = self.policy_net(states).gather(1, actions.unsqueeze(1))
@@ -117,50 +122,50 @@ class DoubleDQN:
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.epsilon = checkpoint['epsilon']
         
-    def rebuild_networks_if_needed(self, state_tensor):
-        """Rebuild networks if input dimension doesn't match state dimension"""
-        input_size = state_tensor.shape[1]
-        current_size = None
+    # def rebuild_networks_if_needed(self, state_tensor):
+    #     """Rebuild networks if input dimension doesn't match state dimension"""
+    #     input_size = state_tensor.shape[1]
+    #     current_size = None
         
-        # Check current network input size directly from policy_net
-        if hasattr(self.policy_net, 'input_size'):
-            current_size = self.policy_net.input_size
-        elif hasattr(self.policy_net, 'network'):
-            for layer in self.policy_net.network:
-                if hasattr(layer, 'in_features'):
-                    current_size = layer.in_features
-                    break
+    #     # Check current network input size directly from policy_net
+    #     if hasattr(self.policy_net, 'input_size'):
+    #         current_size = self.policy_net.input_size
+    #     elif hasattr(self.policy_net, 'network'):
+    #         for layer in self.policy_net.network:
+    #             if hasattr(layer, 'in_features'):
+    #                 current_size = layer.in_features
+    #                 break
         
-        # If sizes don't match or no network exists yet, rebuild
-        if current_size is None or current_size != input_size:
-            self.rebuild_networks(input_size)
-            return True
-        return False
+    #     # If sizes don't match or no network exists yet, rebuild
+    #     if current_size is None or current_size != input_size:
+    #         self.rebuild_networks(input_size)
+    #         return True
+    #     return False
 
-    def rebuild_networks(self, new_state_dim):
-        """Properly rebuild networks with new input dimensions"""
-        print(f"DoubleDQN rebuilding networks: {self.state_dim} -> {new_state_dim}")
+    # def rebuild_networks(self, new_state_dim):
+    #     """Properly rebuild networks with new input dimensions"""
+    #     print(f"DoubleDQN rebuilding networks: {self.state_dim} -> {new_state_dim}")
         
-        # Update the state dimension
-        old_state_dim = self.state_dim
-        self.state_dim = new_state_dim
+    #     # Update the state dimension
+    #     old_state_dim = self.state_dim
+    #     self.state_dim = new_state_dim
         
-        # Get the current device being used
-        device = next(self.policy_net.parameters()).device
+    #     # Get the current device being used
+    #     device = next(self.policy_net.parameters()).device
         
-        # Create completely new network instances with the new dimensions
-        from marl.models.networks import DQNetwork
-        self.policy_net = DQNetwork(new_state_dim, self.action_dim).to(device)
-        self.target_net = DQNetwork(new_state_dim, self.action_dim).to(device)
+    #     # Create completely new network instances with the new dimensions
+    #     from marl.models.networks import DQNetwork
+    #     self.policy_net = DQNetwork(new_state_dim, self.action_dim).to(device)
+    #     self.target_net = DQNetwork(new_state_dim, self.action_dim).to(device)
         
-        # Create a new optimizer for the new policy network
-        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=self.lr)
+    #     # Create a new optimizer for the new policy network
+    #     self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=self.lr)
         
-        # Reset the update counter
-        self.update_counter = 0
+    #     # Reset the update counter
+    #     self.update_counter = 0
         
-        print(f"Created new networks with input size {new_state_dim} on {device}")
+    #     print(f"Created new networks with input size {new_state_dim} on {device}")
         
-        # Clear the replay buffer since old experiences have different dimension
-        self.buffer.memory.clear()
-        print("Cleared replay buffer due to dimension change")
+    #     # Clear the replay buffer since old experiences have different dimension
+    #     self.buffer.memory.clear()
+    #     print("Cleared replay buffer due to dimension change")

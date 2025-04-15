@@ -49,65 +49,82 @@ class TeacherAgent(BaseAgent):
         self.intervention_history = []
         self.intervention_success = []
         self.intervention_threshold = 0.1  # Minimum expected improvement to intervene
+
+        # Add intervention tracking/decay
+        self.intervention_history = []
+        self.episode_counter = 0
+        self.intervention_decay = config.get('intervention_decay', True)
         
     def act(self, state, valid_actions=None, student_action=None, env=None):
-        """Take action with dimension checking"""
+        """Take action with episode-based intervention reduction"""
         # Skip if no valid actions
         if valid_actions is None or len(valid_actions) == 0:
             return False, 0
         
-        # NEW: State dimension check
-        if isinstance(state, np.ndarray) and state.shape[0] != self.model.state_dim:
-            print(f"Teacher state dimension mismatch: got {state.shape[0]}, expected {self.model.state_dim}")
-            # Force rebuild
-            self.rebuild_networks(state.shape[0])  
+        # Calculate intervention threshold with episode decay
+        # This does NOT modify state dimensions or network structure
+        base_threshold = 0.4  # Base intervention rate
+        min_threshold = 0.05  # Minimum intervention rate
+        decay_episodes = 800  # Episodes to decay over
         
-        # Check if exploration
+        # Apply intervention decay if enabled
+        if self.intervention_decay:
+            intervention_threshold = max(min_threshold, 
+                                       base_threshold * (1.0 - self.episode_counter / decay_episodes))
+        else:
+            intervention_threshold = base_threshold
+        
+        # Exploration-based intervention
         if np.random.random() < self.config['epsilon']:
-            # Random decision to intervene
-            should_intervene = np.random.random() < 0.4
+            # Random decision to intervene based on decay
+            should_intervene = np.random.random() < intervention_threshold
             if should_intervene and len(valid_actions) > 0:
                 action = np.random.choice(valid_actions)
+                # Track intervention
+                self.intervention_history.append((self.episode_counter, True))
                 return True, action
             else:
+                # No intervention
+                self.intervention_history.append((self.episode_counter, False))
                 return False, 0
         
-        # Get device of policy network
+        # Exploitation-based intervention (using the existing code)
         device = next(self.model.policy_net.parameters()).device
         
-        # Convert state to tensor on the correct device
+        # Process state tensor (existing code)
         if isinstance(state, np.ndarray):
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
         else:
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
         
-        # Use model to get Q-values (all on same device)
+        # Get action values (existing code)
         with torch.no_grad():
             q_values = self.model.policy_net(state_tensor).squeeze()
         
-        # Filter to valid actions
+        # Filter to valid actions (existing code)
         if valid_actions:
             valid_q = np.array([q_values[a].item() for a in valid_actions])
             best_action_idx = np.argmax(valid_q)
             best_action = valid_actions[best_action_idx]
             
-            # Decide whether to intervene
-            if student_action is None or best_action != student_action:
-                # Intervention threshold - only intervene if significantly better
-                if len(valid_q) > 1:
-                    # Find improvement margin
-                    if student_action is not None:
-                        student_q = q_values[student_action].item()
-                        improvement = valid_q[best_action_idx] - student_q
-                        
-                        # Only intervene if significant improvement
-                        if improvement > 0.1:
-                            return True, best_action
-                    else:
-                        return True, best_action
-            
-            # Default - don't intervene
-            return False, 0
+            # Only intervene if:
+            # 1. Student action is significantly worse than teacher's best action AND
+            # 2. Random value is below decay-adjusted threshold
+            if student_action is not None:
+                student_q = q_values[student_action].item() if student_action < len(q_values) else 0
+                improvement = valid_q[best_action_idx] - student_q
+                
+                # Determine if intervention is needed
+                need_intervention = improvement > 0.15  # Only if significantly better
+                
+                # Apply probability decay
+                if need_intervention and np.random.random() < intervention_threshold:
+                    self.intervention_history.append((self.episode_counter, True))
+                    return True, best_action
+        
+        # Default - don't intervene
+        self.intervention_history.append((self.episode_counter, False))
+        return False, 0
         
     def learn(self, state, action_tuple, reward, next_state, done):
         """Learn from experience with awareness of teacher interventions"""
@@ -144,6 +161,10 @@ class TeacherAgent(BaseAgent):
         # Record intervention outcome for adaptive intervention strategy
         if hasattr(self, 'intervention_outcomes'):
             self.intervention_outcomes.append((should_intervene, reward > 0))
+
+        # If episode is complete, increment counter
+        if done:
+            self.episode_counter += 1
     
     def _analyze_interventions(self):
         if len(self.intervention_outcomes) < 10:
@@ -196,25 +217,18 @@ class TeacherAgent(BaseAgent):
             info['total_performance'] += performance
             info['avg_performance'] = info['total_performance'] / info['count']
     
-    def calculate_teacher_reward(self, env, student_action, teacher_action, performance):
-        """Calculate improved reward based on counterfactual analysis"""
-        if student_action == teacher_action:
-            # Agreed with student - no extra credit
-            return performance * 0.5
-            
-        # Simulate what would happen with student's choice
-        test_pipeline = env.current_pipeline + [str(env.available_components[student_action])]
-        student_performance = env.evaluate_pipeline(test_pipeline)
+    def calculate_teacher_reward(self, student_action, should_intervene, teacher_action, performance):
+        # Non-intervention baseline - make slightly positive
+        if not should_intervene:
+            return 0.02
         
-        # Compare with actual performance
-        improvement = performance - student_performance
-        
-        if improvement > 0.1:
-            return performance * 0.8  # Significant improvement
-        elif improvement > 0:
-            return performance * 0.6  # Modest improvement
+        # Successful intervention - increase reward share
+        if performance > 0:
+            return performance * 0.3  # Increased from 0.2
+        elif student_action == teacher_action:
+            return -0.03  # Reduced from -0.05
         else:
-            return performance * 0.2  # Made things worse
+            return -0.005  # Reduced from -0.01
     
     def rebuild_networks(self, new_state_dim):
         """Rebuild networks and clear buffer when dimensions change"""
