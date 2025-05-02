@@ -1,86 +1,88 @@
+from sklearn.datasets import fetch_openml
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+# import autosklearn.classification
+from tpot import TPOTClassifier
+import numpy as np
 import pandas as pd
-from typing import List, Dict, Any
 
-class PipelineSensor:
-    def __init__(self, model_info_csv: str):
-        self.model_info = pd.read_csv(model_info_csv)
+data = fetch_openml(name='adult', version=2, as_frame=True)
+X = data.data
+y = data.target
 
-    def analyze_data(self, data: pd.DataFrame) -> Dict[str, Any]:
-        analysis = {
-            'num_samples': len(data),
-            'num_features': len(data.columns) - 1,
-            'data_type': self._infer_data_type(data),
-            'linearity': self._check_linearity(data)
-        }
-        return analysis
-    # def suggest_models(self, data_analysis: Dict[str, Any], task: str) -> List[str]:
-    #     compatible_models = []
-    #     for _, model in self.model_info.iterrows():
-    #         if (str(model['Task Performed']).lower() == (task).lower() and
-    #         (model['Type of Data']).lower() == (data_analysis['data_type']).lower()):
-    #             if data_analysis['linearity'] == 'linear':
-    #                 if model['Performance with Linear data'] in ['Excellent', 'Good']:
-    #                     compatible_models.append(model['Model'])
-    #             else:
-    #                 if model['Performance with Non linear data'] in ['Excellent', 'Good']:
-    #                     compatible_models.append(model['Model'])
-        
-    #     if not compatible_models:
-    #         print(f"No compatible models found for task: {task} and data type: {data_analysis['data_type']}")
-        
-        return compatible_models
+y = y.astype(str)
 
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    def validate_pipeline(self, pipeline: List[str], task: str) -> bool:
-        for model_name in pipeline:
-            model_info = self.model_info[self.model_info['Model'] == model_name]
-            if model_info.empty:
-                print(f"Model not found in CSV: {model_name}")
-                return False
-            
-            if str(model_info.iloc[0]['Task Performed']).lower() != str(task).lower():
-                print(f"Incompatible task: {model_name} performs {model_info.iloc[0]['Task Performed']}, but the required task is {task}")
-                return False
-        
-        return True
+# Identify categorical and numerical features
+categorical_cols = X.select_dtypes(include=['category', 'object']).columns
+numeric_cols = X.select_dtypes(include=['number']).columns
 
-    def get_model_details(self, model_name: str) -> Dict[str, Any]:
-        model_info = self.model_info[self.model_info['Model'] == model_name]
-        if model_info.empty:
-            print(f"Model not found in CSV: {model_name}")
-            return {}
-        return model_info.iloc[0].to_dict()
+# Preprocessing pipeline
+numeric_transformer = Pipeline(steps=[
+    ("imputer", SimpleImputer(strategy="mean")),
+    ("scaler", StandardScaler())
+])
 
+categorical_transformer = Pipeline(steps=[
+    ("imputer", SimpleImputer(strategy="most_frequent")),
+    ("onehot", OneHotEncoder(handle_unknown="ignore"))
+])
 
+preprocessor = ColumnTransformer(transformers=[
+    ("num", numeric_transformer, numeric_cols),
+    ("cat", categorical_transformer, categorical_cols)
+])
 
-    def _infer_data_type(self, data: pd.DataFrame) -> str:
-        numeric_cols = data.select_dtypes(include=['int64', 'float64']).columns
-        if len(numeric_cols) > len(data.columns) / 2:
-            return 'Numeric'
-        else:
-            return 'Categorical'
+model_pipeline = Pipeline(steps=[
+    ("preprocessor", preprocessor),
+    ("classifier", LogisticRegression(max_iter=1000))
+])
 
-    def _check_linearity(self, data: pd.DataFrame) -> str:
-        return 'linear' if data.shape[1] < 5 else 'non-linear'
+# Define param grid first
+param_grid = {
+    "classifier": [LogisticRegression(max_iter=1000), RandomForestClassifier()],
+    "classifier__C": [0.1, 1.0, 10.0]
+}
 
-if __name__ == "__main__":
-    sensor = PipelineSensor('model_info.csv')
-    
-    data = pd.DataFrame({
-        'feature1': [1, 2, 3, 4, 5],
-        'feature2': [2, 4, 6, 8, 10],
-        'target': [3, 6, 9, 12, 15]
-    })
-    
-    analysis = sensor.analyze_data(data)
-    print("Data Analysis:", analysis)
-    
-    # suggested_models = sensor.suggest_models(analysis, task='Regression')
-    # print("Suggested Models:", suggested_models)
-    
-    pipeline = ['Linear Regression', 'Polynomial Regression']
-    is_valid = sensor.validate_pipeline(pipeline, task='Regression')
-    print("Is Pipeline Valid:", is_valid)
-    for i in pipeline:
-        model_details = sensor.get_model_details(i)
-        print("Model Details:", model_details)
+# We cannot set conditional params easily, so we do GridSearch only for LogisticRegression for now
+logreg_grid = {
+    "classifier__C": [0.1, 1.0, 10.0]
+}
+
+# Run Grid Search
+grid_search = GridSearchCV(Pipeline([
+    ("preprocessor", preprocessor),
+    ("classifier", LogisticRegression(max_iter=1000))
+]), logreg_grid, cv=3, n_jobs=-1)
+grid_search.fit(X_train, y_train)
+grid_preds = grid_search.predict(X_test)
+grid_acc = accuracy_score(y_test, grid_preds)
+
+# Run Random Search
+random_search = RandomizedSearchCV(Pipeline([
+    ("preprocessor", preprocessor),
+    ("classifier", LogisticRegression(max_iter=1000))
+]), {"classifier__C": np.logspace(-2, 2, 10)}, n_iter=5, cv=3, n_jobs=-1, random_state=42)
+random_search.fit(X_train, y_train)
+random_preds = random_search.predict(X_test)
+random_acc = accuracy_score(y_test, random_preds)
+
+# automl = autosklearn.classification.AutoSklearnClassifier(time_left_for_this_task=600, per_run_time_limit=60)
+# automl.fit(X_train, y_train)
+# autosklearn_preds = automl.predict(X_test)
+# autosklearn_acc = accuracy_score(y_test, autosklearn_preds)
+
+tpot = TPOTClassifier(generations=5, population_size=20, verbosity=2, max_time_mins=10, random_state=42)
+tpot.fit(X_train, y_train)
+tpot_preds = tpot.predict(X_test)
+tpot_acc = accuracy_score(y_test, tpot_preds)
+
+grid_acc, random_acc, tpot_acc
