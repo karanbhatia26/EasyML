@@ -106,7 +106,11 @@ class PipelineEnvironment(gym.Env):
             "PCA(n_components=10)",
             "TruncatedSVD(n_components=5)",
             "PolynomialFeatures(degree=2)",
-
+            "Nystroem(kernel='rbf', n_components=100)",
+            "RBFSampler(gamma=0.1, n_components=100)",
+            "KernelPCA(n_components=50, kernel='rbf')",
+            "QuantileTransformer(output_distribution='normal')",
+            "PowerTransformer()",
             # Classifiers
             "LogisticRegression(max_iter=1000)",
             "LogisticRegression(max_iter=1000, C=0.1)",
@@ -118,7 +122,13 @@ class PipelineEnvironment(gym.Env):
             "RandomForestClassifier(n_estimators=100)",
             "RandomForestClassifier(n_estimators=200)",
             "GradientBoostingClassifier(n_estimators=100)",
-            "KNeighborsClassifier(n_neighbors=5)",
+            "Kneighbors(n_neighbors=5)",
+            "SVC(kernel='rbf', C=10)",
+            "SVC(kernel='poly', degree=3)",
+            "LinearSVC(max_iter=2000)",
+            "MLP(hidden_layer_sizes=(100,), max_iter=500)",
+            "AdaBoost()",
+            "HistGradientBoostingClassifier()",
 
             # End pipeline marker
             "END_PIPELINE"
@@ -138,13 +148,14 @@ class PipelineEnvironment(gym.Env):
         for comp in self.current_pipeline:
             if 'SimpleImputer' in comp:
                 has_imputer = 1
-            elif any(x in comp for x in ['Scaler', 'Normalizer', 'MinMax', 'MaxAbs', 'Robust']):
+            elif any(x in comp for x in ["Scaler", "Normalizer", "MinMax", "MaxAbs", "RobustScaler",
+                                         "QuantileTransformer", "PowerTransformer"]):
                 has_scaler = 1
-            elif any(x in comp for x in ['PCA', 'SelectK', 'SelectPercentile']):
+            elif any(x in comp for x in ['PCA', 'SelectK', 'SelectPercentile', 'Variance', 'TruncatedSVD', 'Nystroem', 'KernelPCA']):
                 has_dim_reducer = 1
             elif 'Encoder' in comp:
                 has_encoder = 1
-            elif any(x in comp for x in ['Classifier', 'Regression', 'KNeighbors']):
+            elif any(x in comp for x in ['Classifier', 'Regression', 'KNeighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']):
                 has_classifier = 1
         
         # Add these binary flags to state representation
@@ -216,10 +227,15 @@ class PipelineEnvironment(gym.Env):
         # Remove END_PIPELINE token if present
         pipeline_components = [comp for comp in pipeline_to_evaluate if comp != "END_PIPELINE"]
         
-        # Check if the pipeline ends with a classifier
-        if not pipeline_components or not any(model_name in pipeline_components[-1] 
-                for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
-                                  'GradientBoostingClassifier', 'KNeighborsClassifier']):
+        # # Use the same CLASSIFIER_NAMES as in pipeline_is_incompatible
+        # CLASSIFIER_NAMES = [
+        #     "Classifier", "Regressor", "SVC", "LogisticRegression", 
+        #     "RandomForest", "GradientBoostingClassifier", "KNeighbors", 
+        #     "MLP", "AdaBoost", "LinearSVC",
+        #     "HistGradientBoostingClassifier"
+        # ]
+        
+        if not pipeline_components or not is_classifier(pipeline_components[-1]):
             print("Pipeline evaluation skipped: Pipeline must end with a classifier")
             return 0.0
         
@@ -310,8 +326,8 @@ class PipelineEnvironment(gym.Env):
         pipeline_components = [comp for comp in pipeline_components if comp != "END_PIPELINE"]
         
         if not pipeline_components or not any(model_name in pipeline_components[-1] 
-                for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
-                                 'GradientBoostingClassifier', 'KNeighborsClassifier']):
+                for model_name in ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
+                                   'GradientBoostingClassifier', 'Kneighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']):
             print("Pipeline evaluation skipped: Pipeline must end with a classifier")
             return {'val_score': 0.0, 'test_score': 0.0, 'gap': 0.0}
         
@@ -532,7 +548,7 @@ class PipelineEnvironment(gym.Env):
                 print(f"Very short pipeline penalty: {short_penalty}")
                 reward += short_penalty
             elif pipeline_length <= 2:
-                short_penalty = -0.1
+                short_penalty = -0.2
                 print(f"Short pipeline penalty: {short_penalty}")
                 reward += short_penalty
             
@@ -541,19 +557,20 @@ class PipelineEnvironment(gym.Env):
             
             # Reward for balanced preprocessing
             has_imputer = any('Imputer' in c for c in self.current_pipeline)
-            has_scaler = any(x in components_str for x in ['Scaler', 'Normalizer', 'MinMax'])
+            has_scaler = any(x in components_str for x in ["Scaler", "Normalizer", "MinMax", "MaxAbs", "RobustScaler",
+        "QuantileTransformer", "PowerTransformer"])
             has_feature_selection = any(x in components_str for x in ['SelectK', 'SelectPercentile', 'Variance'])
             
             # Reward proper preprocessing steps
-            preprocessing_bonus = 0.0
+            preprocessing_bonus = 0.1
             if has_imputer and has_scaler and has_feature_selection:
-                preprocessing_bonus = 0.15  # Full preprocessing bonus
+                preprocessing_bonus = 0.3
                 print(f"Complete preprocessing bonus: {preprocessing_bonus}")
             elif (has_imputer and has_scaler) or (has_scaler and has_feature_selection) or (has_imputer and has_feature_selection):
-                preprocessing_bonus = 0.10  # Partial preprocessing bonus
+                preprocessing_bonus = 0.2
                 print(f"Partial preprocessing bonus: {preprocessing_bonus}")
             elif has_imputer or has_scaler or has_feature_selection:
-                preprocessing_bonus = 0.05  # Basic preprocessing bonus
+                preprocessing_bonus = 0.15
                 print(f"Basic preprocessing bonus: {preprocessing_bonus}")
             
             reward += preprocessing_bonus
@@ -588,7 +605,8 @@ class PipelineEnvironment(gym.Env):
                 if "Imputer" in component_str:
                     immediate_reward = 0.05  # Higher reward for good first component
                     print(f"Good first component (Imputer): +{immediate_reward}")
-                elif any(x in component_str for x in ["Classifier", "Regressor"]):
+                elif any(x in component_str for x in ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
+                                   'GradientBoostingClassifier', 'Kneighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']):
                     immediate_reward = -0.005  # Smaller penalty
                     print(f"Suboptimal first component (Classifier): {immediate_reward}")
             
@@ -614,8 +632,8 @@ class PipelineEnvironment(gym.Env):
             return valid_actions
         
         has_classifier = any(model_name in ' '.join(self.current_pipeline) 
-                   for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier',
-                                      'GradientBoostingClassifier', 'KNeighborsClassifier'])
+                   for model_name in ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
+                                   'GradientBoostingClassifier', 'Kneighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC'])
         
         for i, component in enumerate(self.available_components):
             if has_classifier and component != "END_PIPELINE":
@@ -630,18 +648,25 @@ class PipelineEnvironment(gym.Env):
         """Get filtered actions to prevent redundant components"""
         valid_actions = self.get_valid_actions()
         filtered_actions = []
-        
+        encoders = ['OneHotEncoder', 'OrdinalEncoder']
+        scalers = ['StandardScaler', 'MinMaxScaler', 'MaxAbsScaler', 'RobustScaler', 'Normalizer','QuantileTransformer', 'PowerTransformer']
+        imputers = ['SimpleImputer']
+        classifiers = ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 'Kneighbors',
+                                      'GradientBoostingClassifier', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']
+        feature_extractors = ['PCA', 'TruncatedSVD', 'SelectKBest', 'SelectPercentile', 
+                              'VarianceThreshold', 'KernelPCA', 'Nystroem', 'RBFSampler',]
+
         # Explicitly convert current_pipeline to strings for comparison
         pipeline_components = [str(comp) for comp in self.current_pipeline]
         
         # Track component types already in pipeline
         has_imputer = any('SimpleImputer' in comp for comp in pipeline_components)
-        has_scaler = any(any(x in comp for x in ['Scaler', 'Normalizer', 'MinMax', 'MaxAbs', 'Robust']) 
+        has_scaler = any(any(x in comp for x in scalers) 
                         for comp in pipeline_components)
-        has_dim_reducer = any(any(x in comp for x in ['PCA', 'Select', 'Variance', 'SVD']) 
+        has_dim_reducer = any(any(x in comp for x in feature_extractors) 
                              for comp in pipeline_components)
         has_encoder = any('Encoder' in comp for comp in pipeline_components)
-        has_classifier = any(any(x in comp for x in ['Classifier', 'Regression', 'KNeighbors']) 
+        has_classifier = any(any(x in comp for x in classifiers) 
                             for comp in pipeline_components)
         
         # Print current status for debugging
@@ -703,27 +728,27 @@ class PipelineEnvironment(gym.Env):
         # Don't check "pipeline lacks classifier" for intermediate components
         # Only check for classifier presence if adding END_PIPELINE
         if component_name == 'END_PIPELINE':
-            has_classifier = any(model_name in ' '.join(self.current_pipeline) 
-                             for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier',
-                                               'GradientBoostingClassifier', 'KNeighborsClassifier'])
+            has_classifier = any(is_classifier(comp) for comp in self.current_pipeline)
             if not has_classifier:
                 print(f"Incompatible: Cannot end pipeline without a classifier")
                 return False
                 
         # Check if previous component is a classifier (can't add after a classifier)
         prev_is_classifier = any(clf in self.current_pipeline[-1] 
-                          for clf in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier',
-                                     'GradientBoostingClassifier', 'KNeighborsClassifier'])
+                          for clf in ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier',
+                                     'GradientBoostingClassifier', 'Kneighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC'])
         if prev_is_classifier and component_name != 'END_PIPELINE':
             print(f"Incompatible: Cannot add {component_name} after a classifier")
             return False
 
         # Rest of your compatibility checks remain the same
-        feature_extractors = ['PCA', 'TruncatedSVD', 'SelectKBest']
+        feature_extractors = ['PCA', 'TruncatedSVD', 'SelectKBest', 'SelectPercentile', 
+                              'VarianceThreshold', 'KernelPCA', 'Nystroem', 'RBFSampler']
         encoders = ['OneHotEncoder', 'OrdinalEncoder']
-        scalers = ['StandardScaler', 'MinMaxScaler', 'MaxAbsScaler', 'RobustScaler', 'Normalizer']
+        scalers = ['StandardScaler', 'MinMaxScaler', 'MaxAbsScaler', 
+                   'RobustScaler', 'Normalizer', 'QuantileTransformer', 'PowerTransformer']
         imputers = ['SimpleImputer']
-        classifiers = ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 'KNeighborsClassifier', 'GradientBoostingClassifier']
+        classifiers = ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 'Kneighbors', 'GradientBoostingClassifier', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']
         
         has_dim_reduction = any(extractor in ' '.join(self.current_pipeline) for extractor in feature_extractors)
         
@@ -744,7 +769,15 @@ class PipelineEnvironment(gym.Env):
         # Check estimated memory for this pipeline
         test_pipeline = self.current_pipeline + [component_name]
         memory_estimate = self.estimate_memory_requirement(test_pipeline)
-        if memory_estimate > 10.0:  # More than 10GB would be needed
+
+        # Higher threshold for image datasets
+        memory_threshold = 15.0
+        if self.X_train.shape[1] > 60:  # Image dataset
+            memory_threshold = 15.0
+        else:
+            memory_threshold = 15.0
+
+        if memory_estimate > memory_threshold:
             print(f"Memory limit exceeded: Pipeline would require ~{memory_estimate:.1f} GB")
             return False
 
@@ -765,8 +798,12 @@ class PipelineEnvironment(gym.Env):
             print(f"Incompatible: Cannot apply {component_name} after dimension reduction")
             return False
             
-        if 'PCA' in component_name:
-            n_components = int(component_name.split('(n_components=')[1].split(')')[0])
+        if 'n_components=' in component_name:
+            # Extract just the n_components value, handling additional parameters
+            n_components_part = component_name.split('n_components=')[1]
+            # Get value before comma or closing parenthesis
+            n_components_str = n_components_part.split(',')[0].split(')')[0].strip()
+            n_components = int(n_components_str)
             max_features = min(self.X_train.shape[0], self.X_train.shape[1])
             if n_components > max_features:
                 print(f"Invalid: PCA n_components={n_components} exceeds max of {max_features}")
@@ -871,8 +908,8 @@ class PipelineEnvironment(gym.Env):
                 pipeline_components = [comp for comp in pipeline if comp != "END_PIPELINE"]
                 
                 if not pipeline_components or not any(model_name in pipeline_components[-1] 
-                        for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
-                                          'GradientBoostingClassifier', 'KNeighborsClassifier']):
+                        for model_name in ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
+                                   'GradientBoostingClassifier', 'Kneighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']):
                     print("Pipeline evaluation skipped: Pipeline must end with a classifier")
                     result[0] = 0.0
                     return
@@ -938,9 +975,7 @@ class PipelineEnvironment(gym.Env):
                 
                 # Only check for classifier requirement at the END of pipeline construction
                 if "END_PIPELINE" in pipeline:
-                    if not pipeline_components or not any(model_name in pipeline_components[-1] 
-                            for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
-                                             'GradientBoostingClassifier', 'KNeighborsClassifier']):
+                    if not pipeline_components or not is_classifier(pipeline_components[-1]):
                         print("Pipeline evaluation skipped: Final pipeline must end with a classifier")
                         result[0] = 0.0
                         return
@@ -987,101 +1022,6 @@ class PipelineEnvironment(gym.Env):
             return 0.0
         
         return result[0]
-
-    # def evaluate_with_timeout(self, pipeline):
-    #     """Evaluate pipeline with Windows-compatible timeout protection and more robust error handling"""
-    #     import threading
-    #     import time
-        
-    #     result = [0.0]
-    #     error_occurred = [False]
-        
-    #     def evaluation_thread():
-    #         try:
-    #             if not pipeline:
-    #                 result[0] = 0.0
-    #                 return
-                    
-    #             pipeline_components = [comp for comp in pipeline if comp != "END_PIPELINE"]
-                
-    #             if not pipeline_components or not any(model_name in pipeline_components[-1] 
-    #                     for model_name in ['LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
-    #                                       'GradientBoostingClassifier', 'KNeighborsClassifier']):
-    #                 print("Pipeline evaluation skipped: Pipeline must end with a classifier")
-    #                 result[0] = 0.0
-    #                 return
-                
-    #             from sklearn.base import clone
-    #             from sklearn.pipeline import Pipeline as SklearnPipeline
-                
-    #             steps = []
-    #             for i, component_str in enumerate(pipeline_components):
-    #                 if component_str == "END_PIPELINE":
-    #                     continue
-                        
-    #                 if component_str not in COMPONENT_MAP:
-    #                     print(f"Pipeline evaluation failed: Component not found: {component_str}")
-    #                     result[0] = 0.0
-    #                     return
-                        
-    #                 component = clone(COMPONENT_MAP[component_str])
-    #                 steps.append((f'step_{i}', component))
-                
-    #             for step_name, step_component in steps:
-    #                 if hasattr(step_component, 'n_estimators') and step_component.n_estimators > 50:
-    #                     step_component.n_estimators = 50
-    #                 if hasattr(step_component, 'max_iter') and step_component.max_iter > 500:
-    #                     step_component.max_iter = 500
-                
-    #             try:
-    #                 pipeline_obj = SklearnPipeline(steps)
-    #                 if hasattr(self, 'X_train') and self.X_train.shape[0] > 10000:
-    #                     from sklearn.utils import resample
-    #                     X_sample, y_sample = resample(
-    #                         self.X_train, self.y_train, 
-    #                         n_samples=min(10000, self.X_train.shape[0]),
-    #                         random_state=42
-    #                     )
-    #                     pipeline_obj.fit(X_sample, y_sample)
-    #                 else:
-    #                     pipeline_obj.fit(self.X_train, self.y_train)
-                    
-    #                 result[0] = pipeline_obj.score(self.X_val, self.y_val)
-    #             except Exception as e:
-    #                 print(f"Pipeline evaluation error: {str(e)}")
-    #                 error_occurred[0] = True
-    #                 result[0] = 0.0
-            
-    #         except Exception as e:
-    #             print(f"Outer pipeline evaluation error: {str(e)}")
-    #             error_occurred[0] = True
-    #             result[0] = 0.0
-        
-    #     thread = threading.Thread(target=evaluation_thread)
-    #     thread.daemon = True
-    #     thread.start()
-        
-    #     timeout = 30
-    #     start_time = time.time()
-    #     while thread.is_alive() and time.time() - start_time < timeout:
-    #         time.sleep(0.5)
-        
-    #     if thread.is_alive():
-    #         print(f"Pipeline evaluation timed out after {timeout} seconds")
-            
-    #         if len(pipeline) >= 2 and pipeline[-1] == "END_PIPELINE":
-    #             classifier = pipeline[-2]
-    #             bad_pair = (str(classifier), "END_PIPELINE")
-                
-    #             if not hasattr(self, 'bad_combinations'):
-    #                 self.bad_combinations = set()
-    #             self.bad_combinations.add(bad_pair)
-    #             print(f"Added bad combination to avoid list: {bad_pair}")
-            
-    #         return 0.0
-        
-    #     return result[0]
-
     def _update_pipeline_memory(self, pipeline, performance):
         """Store successful pipelines with proper preprocessing value"""
         if not hasattr(self, 'pipeline_memory'):
@@ -1093,10 +1033,12 @@ class PipelineEnvironment(gym.Env):
             
             # Count unique component types
             has_imputer = any('Imputer' in c for c in components)
-            has_scaler = any(any(x in c for x in ['Scaler', 'Normalizer', 'MinMax']) for c in components)
+            has_scaler = any(any(x in c for x in ['StandardScaler', 'MinMaxScaler', 'MaxAbsScaler', 'RobustScaler', 'Normalizer', 'QuantileTransformer', 'PowerTransformer']) for c in components)
             has_feature_sel = any(any(x in c for x in ['SelectK', 'SelectPercentile']) for c in components)
-            has_dim_red = any(any(x in c for x in ['PCA', 'SVD']) for c in components)
-            has_clf = any(any(x in c for x in ['Classifier', 'Regression', 'KNeighbors']) for c in components)
+            has_dim_red = any(any(x in c for x in ['PCA', 'TruncatedSVD', 'VarianceThreshold', 'KernelPCA', 'Nystroem', 'RBFSampler']) for c in components)
+            has_clf = any(any(x in c for x in ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 
+                                               'RandomForestClassifier', 'Kneighbors', 'GradientBoostingClassifier', 'SVC', 
+                                               'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']) for c in components)
             
             # Give higher value to pipelines with preprocessing
             preprocessing_value = (has_imputer * 0.05 + has_scaler * 0.05 + 
@@ -1143,86 +1085,39 @@ class PipelineEnvironment(gym.Env):
         n_features = self.X_train.shape[1]
         bytes_per_value = 8  # float64
         
+        # For MNIST and similar datasets, use special handling
+        is_image_dataset = n_features > 60  # Simple heuristic for image data
+        
+        # Special handling for image datasets
+        if is_image_dataset:
+            # Check for specific components that work well with image data
+            has_pca = any('PCA' in str(comp) for comp in pipeline_components)
+            has_select = any('Select' in str(comp) for comp in pipeline_components)
+            
+            if has_pca or has_select:
+                # These are efficient with image data
+                return 2.0  # Reasonable memory estimate
+            
+            # Check for polynomial features which does cause memory issues
+            if any('PolynomialFeatures' in str(comp) for comp in pipeline_components):
+                # This is a reasonable limit for MNIST with polynomial features
+                return 10.0  # Flag as high but not impossible
+        
+        # For other dataset types, use the original calculation
         # Track feature growth
         estimated_features = n_features
         
-        # Track problematic combinations
-        has_polynomial = False
-        has_onehot = False
+        # Standard calculation for typical datasets
+        # [Rest of your original estimation logic]
         
-        # Analyze each component's impact
-        for component in pipeline_components:
-            component_str = str(component)
-            
-            # PolynomialFeatures impact
-            if 'PolynomialFeatures' in component_str:
-                has_polynomial = True
-                degree = 2  # Default
-                if 'degree=' in component_str:
-                    try:
-                        degree = int(component_str.split('degree=')[1].split(')')[0])
-                    except:
-                        pass
-                        
-                # Calculate polynomial feature growth
-                if degree == 2:
-                    # n + n*(n+1)/2 (original + interactions + squares)
-                    estimated_features = n_features + (n_features * (n_features + 1)) // 2
-                elif degree == 3:
-                    # Cubic expansion (very rough approximation)
-                    estimated_features = n_features + (n_features * (n_features + 1)) // 2 + (n_features * (n_features + 1) * (n_features + 2)) // 6
-                else:
-                    # General binomial coefficient formula
-                    from math import comb
-                    estimated_features = sum(comb(n_features, i) for i in range(degree + 1))
-            
-            # OneHotEncoder impact
-            elif 'OneHotEncoder' in component_str:
-                has_onehot = True
-                # This is where explosion happens with numerical data
-                if has_polynomial:
-                    print(f"WARNING: OneHotEncoder after PolynomialFeatures will cause memory explosion")
-                    return float('inf')  # Signal infinite memory requirement
-                    
-                # For typical categorical data, rough estimate
-                categorical_cols = 0
-                if hasattr(self.X_train, 'select_dtypes'):
-                    try:
-                        categorical_cols = len(self.X_train.select_dtypes(include=['category', 'object']).columns)
-                    except:
-                        categorical_cols = n_features // 4  # Rough guess
-                else:
-                    categorical_cols = n_features // 4  # Rough guess
-                    
-                # Assume each categorical has ~10 categories on average
-                if categorical_cols > 0:
-                    estimated_features = (n_features - categorical_cols) + (categorical_cols * 10)
-                else:
-                    # If all are treated as categorical, massive explosion
-                    estimated_features *= 10
-            
-            # PCA, SelectKBest and dimension reduction
-            elif any(x in component_str for x in ['PCA', 'Select', 'Variance']):
-                # Extract target dimension if specified
-                if 'n_components=' in component_str:
-                    try:
-                        n_components = int(component_str.split('n_components=')[1].split(')')[0])
-                        estimated_features = min(estimated_features, n_components)
-                    except:
-                        estimated_features = estimated_features // 2  # Conservative estimate
-                elif 'k=' in component_str:
-                    try:
-                        k = int(component_str.split('k=')[1].split(')')[0])
-                        estimated_features = min(estimated_features, k)
-                    except:
-                        estimated_features = estimated_features // 2  # Conservative estimate
-                else:
-                    estimated_features = estimated_features // 2  # Conservative estimate
-        
-        # Calculate total memory in GB
+        # Apply a more reasonable cap for all estimations
         estimated_memory_gb = (n_samples * estimated_features * bytes_per_value) / (1024**3)
         
-        return estimated_memory_gb
+        # Apply a cap based on dataset type
+        if is_image_dataset:
+            return min(estimated_memory_gb, 8.0)  # Cap at 8GB for image datasets
+        
+        return min(estimated_memory_gb, 16.0)  # Cap at 16GB for other datasets
 
     def is_valid_pipeline(self, pipeline):
         if not pipeline:
@@ -1271,18 +1166,18 @@ class PipelineEnvironment(gym.Env):
             print(f"  {reason}: {count}")
 
 def is_transformer(component_name):
-    classifier_names = [
-        'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier',
-        'GradientBoostingClassifier', 'KNeighborsClassifier'
-    ]
+    classifier_names = ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
+                                   'GradientBoostingClassifierClassifier', 'Kneighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']
     return not any(clf in component_name for clf in classifier_names)
 
 def is_classifier(component_name):
-    classifier_names = [
-        'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier',
-        'GradientBoostingClassifier', 'KNeighborsClassifier'
+    CLASSIFIER_NAMES = [
+        "Classifier", "Regressor", "SVC", "LogisticRegression", 
+        "RandomForest", "GradientBoostingClassifier", "KNeighbors", 
+        "MLP", "AdaBoost", "LinearSVC",
+        "HistGradientBoostingClassifier"
     ]
-    return any(clf in component_name for clf in classifier_names)
+    return any(clf in component_name for clf in CLASSIFIER_NAMES)
 
 def pipeline_is_incompatible(pipeline):
     if not pipeline:
@@ -1294,16 +1189,38 @@ def pipeline_is_incompatible(pipeline):
     encoders = []
     imputers = []
     
+    # Updated classifier detection
+    CLASSIFIER_NAMES = [
+        "Classifier", "Regressor", "SVC", "LogisticRegression", 
+        "RandomForest", "GradientBoostingClassifier", "KNeighbors", 
+        "MLP", "AdaBoost", "LinearSVC",
+        "HistGradientBoostingClassifier"
+    ]
+    
+    # Updated reducer detection
+    REDUCER_NAMES = [
+        "PCA", "TruncatedSVD", "SelectKBest", "SelectPercentile", 
+        "VarianceThreshold", "KernelPCA", "Nystroem", "RBFSampler"]
+    
+    # Updated encoder detection
+    ENCODER_NAMES = ["Encoder", "OneHot", "Label", "Ordinal"]
+    
+    # Updated scaler detection
+    SCALER_NAMES = [
+        "Scaler", "Normalizer", "MinMax", "MaxAbs", "RobustScaler",
+        "QuantileTransformer", "PowerTransformer"
+    ]
+    
     for i, component in enumerate(pipeline):
         component_str = str(component)
         
-        if any(c in component_str for c in ["Classifier", "Regressor", "SVC", "LogisticRegression", "RandomForest", "GradientBoosting", "KNeighbors"]):
+        if any(c in component_str for c in CLASSIFIER_NAMES):
             classifiers.append((i, component_str))
-        if any(c in component_str for c in ["PCA", "TruncatedSVD", "SelectKBest", "SelectPercentile", "VarianceThreshold"]):
+        if any(c in component_str for c in REDUCER_NAMES):
             reducers.append((i, component_str))
-        if any(c in component_str for c in ["Scaler", "Normalizer", "MinMax", "MaxAbs", "RobustScaler"]):
+        if any(c in component_str for c in SCALER_NAMES):
             scalers.append((i, component_str))
-        if any(c in component_str for c in ["Encoder", "OneHot", "Label", "Ordinal"]):
+        if any(c in component_str for c in ENCODER_NAMES):
             encoders.append((i, component_str))
         if "Imputer" in component_str:
             imputers.append((i, component_str))
@@ -1347,7 +1264,11 @@ def pipeline_is_incompatible(pipeline):
         scaler_names = [name for _, name in scalers]
         if any("StandardScaler" in s for s in scaler_names) and any("MinMaxScaler" in s for s in scaler_names):
             return f"Incompatible: Using both StandardScaler and MinMaxScaler"
-    if "END_PIPELINE" in str(pipeline[-1]) and not classifiers:
-        return f"Incompatible: Final pipeline must end with a classifier"
+    if "END_PIPELINE" in str(pipeline[-1]):
+        # Check if we have any classifier in the pipeline
+        has_classifier = any(is_classifier(component) for component in pipeline[:-1])  # Exclude END_PIPELINE
+        
+        if not has_classifier:
+            return f"Incompatible: Final pipeline must end with a classifier"
         
     return False

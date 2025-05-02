@@ -240,8 +240,6 @@ class TeacherContributionTracker:
                      for i in range(self.episode_bins)]
         
         plt.figure(figsize=(16, 12))
-        
-        # Plot teacher usage rate
         plt.subplot(2, 2, 1)
         plt.bar(bin_labels, [rate * 100 for rate in stats["contribution_rates"]])
         plt.title("Teacher Action Usage Rate")

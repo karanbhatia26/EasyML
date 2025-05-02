@@ -9,6 +9,7 @@ from marl.agents.teacher import TeacherAgent
 from marl.environments.pipeline_env import PipelineEnvironment
 from marl.utils.credit_assignment import CreditAssignment
 from marl.utils.component_guide import ComponentGuide
+from marl.environments.ml_components import COMPONENT_MAP
 from marl.utils.visualizer import PerformanceVisualizer, CollaborationVisualizer, TeacherContributionTracker
 from sklearn.datasets import fetch_openml, fetch_covtype
 from marl.models.double_dqn import DQNetwork
@@ -82,6 +83,14 @@ def load_dataset(dataset_name):
     elif dataset_name == "covtype":
         print("Loading Covertype dataset...")
         data = fetch_covtype(as_frame=True)
+    elif dataset_name == "credit-g":
+        data = fetch_openml(data_id=31, as_frame=True)
+    elif dataset_name == "travel":
+        data = fetch_openml(data_id=45065, as_frame=True)
+    elif dataset_name == "banknote":
+        data = fetch_openml(name='BNG(banknote-authentication)', data_id=1462, as_frame=True)
+    elif dataset_name == "click-prediction":
+        data = fetch_openml(name='click_prediction_small', data_id=4134, as_frame=True)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
     
@@ -188,13 +197,16 @@ def main():
     
     for episode in range(episodes):
         state = env.reset()
+        teacher_state = env.get_teacher_state([])  # Empty history for initial state
+        teacher_state_dim = len(teacher_state)
+        print(f"Student state dimension: {state_dim}, Teacher state dimension: {teacher_state_dim}")
         state_monitor.check_state(state)
 
         if state.shape[0] != state_dim:
             print(f"State dimension changed: {state_dim} -> {state.shape[0]}")
             state_dim = state.shape[0]
             student = StudentAgent(state_dim, action_dim, student_config)
-            teacher = TeacherAgent(state_dim, action_dim, teacher_config)
+            teacher = TeacherAgent(teacher_state_dim, action_dim, teacher_config)
         
         done = False
         episode_reward = 0
@@ -291,17 +303,15 @@ def main():
     plt.show()
 
 def marl_training(dataset_name="iris", episodes=20):
-    """Train ML pipeline construction using MARL approach"""
+
     print_gpu_statistics()
     dataset = load_dataset(dataset_name)
     
-    env = PipelineEnvironment(dataset, max_pipeline_length=6)
+    env = PipelineEnvironment(dataset, available_components=list(COMPONENT_MAP.keys()), max_pipeline_length=6)
     
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
-    
-    # Teacher has extended state to observe student behavior
-    teacher_state_dim = state_dim + action_dim  # Add student action history
+    teacher_state_dim = state_dim + action_dim
     
     model_dir = "models"
     os.makedirs(model_dir, exist_ok=True)
@@ -318,14 +328,15 @@ def marl_training(dataset_name="iris", episodes=20):
         'learning_rate': 1e-4, 
         'gamma': 0.99,
         'epsilon': 0.3,
-        'intervention_decay': True,  # Enable intervention decay
+        'intervention_decay': True,
         'batch_size': 32
     }
-    
+    state = env.reset()
+    teacher_state = env.get_teacher_state([])
+    teacher_state_dim = len(teacher_state)
+    print(f"Student state dimension: {state_dim}, Teacher state dimension: {teacher_state_dim}")
     student = StudentAgent(state_dim, action_dim, student_config)
     teacher = TeacherAgent(teacher_state_dim, action_dim, teacher_config)
-    
-    # Load existing models if available
     if os.path.exists(student_path):
         try:
             student.load(student_path)
@@ -337,7 +348,9 @@ def marl_training(dataset_name="iris", episodes=20):
             teacher.load(teacher_path)
         except:
             print("Could not load teacher model - using new model")
-            
+    print("\nAvailable components and their action indices:")
+    for idx, component in enumerate(env.available_components):
+        print(f"  {idx}: {component}")
     credit_assigner = CreditAssignment()
     visualizer = PerformanceVisualizer()
     contribution_tracker = TeacherContributionTracker(episodes)
@@ -359,9 +372,13 @@ def marl_training(dataset_name="iris", episodes=20):
         if state.shape[0] != state_dim:
             print(f"State dimension changed: {state_dim} -> {state.shape[0]}")
             state_dim = state.shape[0]
-            teacher_state_dim = state_dim  # FIX: Update teacher state dimension too
             
-            print(f"Recreating both agents with new state dimension: {state_dim}")
+            # Get the new teacher state dimension
+            teacher_state = env.get_teacher_state([])
+            teacher_state_dim = len(teacher_state)
+            print(f"New student state dimension: {state_dim}, New teacher state dimension: {teacher_state_dim}")
+            
+            print(f"Recreating agents with updated dimensions")
             student = StudentAgent(state_dim, action_dim, student_config)
             teacher = TeacherAgent(teacher_state_dim, action_dim, teacher_config)
         
@@ -491,7 +508,7 @@ def marl_training(dataset_name="iris", episodes=20):
             # Get component credits
             component_credits = credit_assigner.assign_component_credit(
                 pipeline_components, performance, 
-                lambda pipeline: env.evaluate_with_timeout(pipeline, timeout=5))
+                lambda pipeline: env.evaluate_with_timeout(pipeline, timeout=300))
                 
             # Print component contributions
             print("\nComponent contributions:")
@@ -580,17 +597,17 @@ def marl_training(dataset_name="iris", episodes=20):
     print(f"Best pipeline: {best_pipeline}")
     
     # Generate visualizations
-    visualizer.plot_learning_curves(window_size=5, save_path="marl_learning_curves.png")
-    visualizer.plot_pipeline_evolution(save_path="marl_pipeline_evolution.png")
+    visualizer.plot_learning_curves(window_size=5, save_path=f"marl_learning_curves_{dataset_name}.png")
+    visualizer.plot_pipeline_evolution(save_path=f"marl_pipeline_evolution_{dataset_name}.png")
     contribution_tracker.print_contribution_report()
-    contribution_tracker.plot_teacher_contribution(save_path="marl_teacher_contribution.png")
+    contribution_tracker.plot_teacher_contribution(save_path=f"marl_teacher_contribution_{dataset_name}.png")
     env.print_pipeline_statistics()
     
-    plot_intervention_rate(teacher)
+    plot_intervention_rate(teacher, dataset_name)
     
     return env
 
-def test_run(dataset="adult", episodes=500):
+def test_run(dataset="iris", episodes=500):
     return marl_training(dataset_name=dataset, episodes=episodes)
 
 def adapt_model_to_new_dimensions(saved_model_path, new_input_dim, new_output_dim):
@@ -609,7 +626,7 @@ def adapt_model_to_new_dimensions(saved_model_path, new_input_dim, new_output_di
     new_model.load_state_dict(new_state_dict)
     return new_model
 
-def plot_intervention_rate(teacher):
+def plot_intervention_rate(teacher,dataset_name):
     """Plot teacher intervention rate over episodes"""
     import matplotlib.pyplot as plt
     import numpy as np
@@ -634,8 +651,20 @@ def plot_intervention_rate(teacher):
     plt.legend()
     plt.ylim(-0.1, 1.1)
     plt.grid(True, alpha=0.3)
-    plt.savefig("intervention_rate.png")
+    plt.savefig(f"intervention_rate_{dataset_name}.png")
     plt.close()
 
+# if __name__ == "__main__":
+#      def test_run(dataset="iris", episodes=500):
+#     print(f"Running test with dataset={dataset}, episodes={int(episodes)}")
+#     return marl_training(dataset_name=dataset, episodes=int(episodes))
+
 if __name__ == "__main__":
-    test_run()
+
+    import argparse
+    parser = argparse.ArgumentParser(description="Train MARL agents for AutoML")
+    parser.add_argument("--dataset", type=str, default="iris", help="Dataset name")
+    parser.add_argument("--episodes", type=int, default=500, help="Number of episodes")
+    
+    args = parser.parse_args()
+    test_run(dataset=args.dataset, episodes=args.episodes)

@@ -64,16 +64,20 @@ class ComponentGuide:
 class ComponentTransitionRules:
     def __init__(self):
         self.preprocessors = ["SimpleImputer", "StandardScaler", "MinMaxScaler", 
-                             "RobustScaler", "MaxAbsScaler", "Normalizer"]
+                             "RobustScaler", "MaxAbsScaler", "Normalizer",
+                             "QuantileTransformer", "PowerTransformer"]
         
         self.feature_transformers = ["PCA", "SelectKBest", "SelectPercentile", 
-                                    "VarianceThreshold", "TruncatedSVD", "PolynomialFeatures"]
+                                    "VarianceThreshold", "TruncatedSVD", "PolynomialFeatures",
+                                    "Nystroem", "RBFSampler", "KernelPCA"]
         
         self.encoders = ["OneHotEncoder", "OrdinalEncoder"]
         
         self.classifiers = ["LogisticRegression", "DecisionTreeClassifier", 
                            "RandomForestClassifier", "GradientBoostingClassifier", 
-                            "KNeighborsClassifier"]
+                           "KNeighborsClassifier", "SVC", "LinearSVC", "MLPClassifier",
+                           "VotingClassifier", "HistGradientBoostingClassifier",
+                           "AdaBoostClassifier"]
         
         # Define allowed transitions between component groups
         self.allowed_transitions = {
