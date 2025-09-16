@@ -47,34 +47,40 @@ class StudentAgent(BaseAgent):
         if valid_actions is None or len(valid_actions) == 0:
             return -1
 
+        # Optional memory/teacher hints (kept minimal)
         if env and hasattr(env, 'pipeline_memory') and env.pipeline_memory and random.random() < 0.2:
             current_len = len(env.current_pipeline) if hasattr(env, 'current_pipeline') else 0
-            
             for mem_pipeline in env.pipeline_memory[:2]:
                 if current_len < len(mem_pipeline['components']):
                     next_comp = mem_pipeline['components'][current_len]
-                    
                     for action in valid_actions:
                         if str(env.available_components[action]) == str(next_comp):
                             print(f"Student using pipeline memory guidance: {next_comp}")
                             return action
         
-        if teacher_feedback is not None and random.random() < 0.7:
-            if teacher_feedback in valid_actions:
-                return teacher_feedback
+        if teacher_feedback is not None and random.random() < 0.7 and teacher_feedback in valid_actions:
+            return int(teacher_feedback)
         
-        return self.model.select_action(state, valid_actions)
+        return self.select_action(state, valid_actions)
     
     def select_action(self, state, valid_actions):
-        if np.random.random() < self.config.get('epsilon', 0.1):
-            return np.random.choice(valid_actions)
-            
-        state_tensor = torch.FloatTensor(state).unsqueeze(0)
+        if valid_actions is None or len(valid_actions) == 0:
+            return -1
+
+        eps = self.config.get('epsilon', 0.1)
+        if np.random.random() < eps:
+            return int(np.random.choice(valid_actions))
+
+        device = next(self.model.policy_net.parameters()).device
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
         with torch.no_grad():
-            action_values = self.model.policy_net(state_tensor)
-            
-        valid_action_values = action_values[0][valid_actions]
-        return valid_actions[torch.argmax(valid_action_values).item()]
+            q_values = self.model.policy_net(state_tensor).squeeze(0)
+
+        mask = torch.full((self.action_dim,), float('-inf'), device=q_values.device)
+        mask[valid_actions] = 0.0
+        masked_q = q_values + mask
+
+        return int(torch.argmax(masked_q).item())
     
     def learn(self, state, action, reward, next_state, done, teacher_intervened=False):
         if isinstance(state, np.ndarray) and state.shape[0] != self.state_dim:
@@ -150,21 +156,15 @@ class StudentAgent(BaseAgent):
             print(f"Student state dimension mismatch in act_greedy: got {state.shape[0]}, expected {self.state_dim}")
             self.rebuild_networks(state.shape[0])
 
-        # Handle case with no valid actions
         if valid_actions is None or len(valid_actions) == 0:
             return -1
 
-        # Always select the action with highest Q-value (no randomness)
-        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(next(self.model.policy_net.parameters()).device)
+        device = next(self.model.policy_net.parameters()).device
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
         with torch.no_grad():
-            action_values = self.model.policy_net(state_tensor)
+            q_values = self.model.policy_net(state_tensor).squeeze(0)
 
-        # Filter to only valid actions
-        mask = torch.ones(self.action_dim) * float('-inf')
-        mask[valid_actions] = 0
-        masked_action_values = action_values + mask
-
-        # Select the best valid action
-        action = torch.argmax(masked_action_values).item()
-
-        return action
+        mask = torch.full((self.action_dim,), float('-inf'), device=q_values.device)
+        mask[valid_actions] = 0.0
+        masked_q = q_values + mask
+        return int(torch.argmax(masked_q).item())

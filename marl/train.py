@@ -18,6 +18,17 @@ import polars as pl
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
+def set_seed(seed: int = 42):
+    import random as _random
+    import numpy as _np
+    _np.random.seed(seed)
+    _random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 def load_dataset_with_polars(dataset_name):
     print(f"Loading {dataset_name} dataset with Polars...")
     
@@ -51,7 +62,7 @@ def load_dataset_with_polars(dataset_name):
     X_train = X.filter(train_mask)
     X_test = X.filter(~train_mask)
     y_train = y.filter(train_mask)
-    y_test = y.filter(~train_mask)
+    y_test = y.filter(~val_mask)
     
     val_mask = pl.Series([True if i >= int(0.75 * X_train.height) else False for i in range(X_train.height)])
     X_val = X_train.filter(val_mask)
@@ -283,8 +294,9 @@ def main():
     print(f"Best performance: {best_performance:.4f}")
     print(f"Best pipeline: {best_pipeline}")
     os.makedirs("models", exist_ok=True)
-    student.save(f"models/{dataset}.pt")
-    teacher.save(f"models/{dataset}.pt")
+    # Save to distinct, valid filenames
+    student.save("models/student_model_basic_iris.pt")
+    teacher.save("models/teacher_model_basic_iris.pt")
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     plt.plot(all_rewards)
@@ -303,11 +315,11 @@ def main():
     plt.show()
 
 def marl_training(dataset_name="iris", episodes=20):
-
+    set_seed(42)
     print_gpu_statistics()
     dataset = load_dataset(dataset_name)
     
-    env = PipelineEnvironment(dataset, available_components=list(COMPONENT_MAP.keys()), max_pipeline_length=6)
+    env = PipelineEnvironment(dataset, available_components=list(COMPONENT_MAP.keys()), max_pipeline_length=8, debug=False)
     
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
@@ -505,10 +517,13 @@ def marl_training(dataset_name="iris", episodes=20):
         
         # Only for successful pipelines with multiple components
         if len(pipeline_components) > 1 and performance > 0:
-            # Get component credits
-            component_credits = credit_assigner.assign_component_credit(
-                pipeline_components, performance, 
-                lambda pipeline: env.evaluate_with_timeout(pipeline, timeout=300))
+            # Throttle expensive ablations and use stricter timeout
+            if (episode + 1) % 5 == 0 and performance >= 0.1:
+                component_credits = credit_assigner.assign_component_credit(
+                    pipeline_components, performance,
+                    lambda pipeline: env.evaluate_with_timeout(pipeline, timeout=120))
+            else:
+                component_credits = {}
                 
             # Print component contributions
             print("\nComponent contributions:")

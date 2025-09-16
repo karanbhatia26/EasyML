@@ -166,7 +166,8 @@ class TeacherContributionTracker:
     def __init__(self, num_episodes):
         self.num_episodes = num_episodes
         self.episode_bins = 10
-        self.bin_size = num_episodes // self.episode_bins
+        # Ensure bin_size is at least 1 to avoid division by zero for small runs
+        self.bin_size = max(1, num_episodes // self.episode_bins)
         
         # Initialize counters
         self.teacher_actions_used = [0] * self.episode_bins
@@ -228,11 +229,17 @@ class TeacherContributionTracker:
             start_ep = i * self.bin_size
             end_ep = min((i + 1) * self.bin_size - 1, self.num_episodes - 1)
             
+            tr = stats['avg_teacher_rewards'][i]
+            sr = stats['avg_student_rewards'][i]
+            perf = stats['avg_performances'][i]
+            tr_str = f"{tr:6.3f}" if self.teacher_rewards[i] else "   N/A"
+            sr_str = f"{sr:6.3f}" if self.student_rewards[i] else "   N/A"
+            perf_str = f"{perf:6.3f}" if self.bin_performances[i] else "   N/A"
             print(f"{start_ep:4d}-{end_ep:<4d}    | " +
                   f"{stats['contribution_rates'][i]*100:6.1f}%      | " +
-                  f"{stats['avg_teacher_rewards'][i]:6.3f}       | " +
-                  f"{stats['avg_student_rewards'][i]:6.3f}       | " +
-                  f"{stats['avg_performances'][i]:6.3f}")
+                  f"{tr_str}       | " +
+                  f"{sr_str}       | " +
+                  f"{perf_str}")
                   
     def plot_teacher_contribution(self, save_path=None):
         stats = self.get_contribution_stats()
@@ -250,8 +257,11 @@ class TeacherContributionTracker:
         plt.subplot(2, 2, 2)
         x = range(len(bin_labels))
         width = 0.35
-        plt.bar([i-width/2 for i in x], stats["avg_teacher_rewards"], width, label="Teacher")
-        plt.bar([i+width/2 for i in x], stats["avg_student_rewards"], width, label="Student")
+        # Use zeros for empty bins to avoid NaN plotting issues
+        tvals = [v if np.isfinite(v) else 0 for v in stats["avg_teacher_rewards"]]
+        svals = [v if np.isfinite(v) else 0 for v in stats["avg_student_rewards"]]
+        plt.bar([i-width/2 for i in x], tvals, width, label="Teacher")
+        plt.bar([i+width/2 for i in x], svals, width, label="Student")
         plt.title("Average Reward by Agent")
         plt.xlabel("Episodes")
         plt.ylabel("Average Reward")
@@ -260,7 +270,8 @@ class TeacherContributionTracker:
         
         plt.subplot(2, 1, 2)
         ax1 = plt.gca()
-        ax1.bar(bin_labels, stats["avg_performances"], alpha=0.7)
+        pvals = [v if np.isfinite(v) else 0 for v in stats["avg_performances"]]
+        ax1.bar(bin_labels, pvals, alpha=0.7)
         ax1.set_xlabel("Episodes")
         ax1.set_ylabel("Performance", color='b')
         ax1.tick_params(axis='y', labelcolor='b')

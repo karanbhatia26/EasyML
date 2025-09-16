@@ -38,8 +38,11 @@ Thumbs.db
 *.log
 logs/
 lightning_logs/
-
+server/
+tests/
+experiments/
 # Cache
 .cache/
 paper.tex
 paper2.tex
+

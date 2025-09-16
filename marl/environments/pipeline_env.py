@@ -11,8 +11,9 @@ from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
-from marl.environments.ml_components import COMPONENT_MAP
+from marl.environments.ml_components import COMPONENT_MAP, COMPONENT_META
 import signal
+from collections import deque, Counter
 
 class TimeoutException(Exception): pass
 
@@ -22,7 +23,7 @@ def timeout_handler(signum, frame):
 class PipelineEnvironment(gym.Env):
     """Environment for building ML pipelines."""
     
-    def __init__(self, dataset, available_components=None, max_pipeline_length=10):
+    def __init__(self, dataset, available_components=None, max_pipeline_length=10, debug=False):
         super().__init__()
         
         # Make sure dataset is a dictionary with all required keys
@@ -44,6 +45,7 @@ class PipelineEnvironment(gym.Env):
         
         # Environment parameters
         self.max_pipeline_length = max_pipeline_length
+        self.debug = debug
         
         # Action and observation spaces
         self.action_space = spaces.Discrete(len(self.available_components))
@@ -59,6 +61,9 @@ class PipelineEnvironment(gym.Env):
         # Current state
         self.current_pipeline = []
         self.last_performance = 0.0
+        # Track component usage for overuse penalties
+        self.usage_window = deque(maxlen=200)
+        self.usage_counter = Counter()
         
         self.transition_rules = ComponentTransitionRules()
         self.fixed_state_dim = None
@@ -377,6 +382,7 @@ class PipelineEnvironment(gym.Env):
         
         rf = RandomForestClassifier(n_estimators=100)
         rf.fit(self.X_train, self.y_train)
+        # FIX: score must use y_test, not y_train
         baselines["Random Forest"] = rf.score(self.X_test, self.y_test)
         
         results = {
@@ -413,7 +419,8 @@ class PipelineEnvironment(gym.Env):
                 
             if component_str not in COMPONENT_MAP:
                 print(f"Pipeline evaluation failed: Component not found: {component_str}")
-                return {'mean_score': 0.0, 'std_score': 0.0, 'stability': 0.0}
+                # Include status so callers can track failures
+                return {'mean_score': 0.0, 'std_score': 0.0, 'stability': 0.0, 'all_scores': [], 'status': 'exception'}
                 
             component = COMPONENT_MAP[component_str]
             steps.append((f'step_{i}', component))
@@ -431,11 +438,12 @@ class PipelineEnvironment(gym.Env):
                 'mean_score': cv_scores.mean(),
                 'std_score': cv_scores.std(),
                 'all_scores': cv_scores,
-                'stability': 1 - (cv_scores.std() / cv_scores.mean()) if cv_scores.mean() > 0 else 0
+                'stability': 1 - (cv_scores.std() / cv_scores.mean()) if cv_scores.mean() > 0 else 0,
+                'status': 'success'
             }
         except Exception as e:
             print(f"Cross-validation error: {str(e)}")
-            return {'mean_score': 0.0, 'std_score': 0.0, 'stability': 0.0}
+            return {'mean_score': 0.0, 'std_score': 0.0, 'stability': 0.0, 'all_scores': [], 'status': 'exception'}
 
     def validate_pipeline_results(self, best_pipeline):
         """Comprehensive validation of pipeline results."""
@@ -498,6 +506,9 @@ class PipelineEnvironment(gym.Env):
         
         component = self.available_components[action]
         self.current_pipeline.append(str(component))
+        # usage tracking
+        self.usage_window.append(str(component))
+        self.usage_counter[str(component)] += 1
         
         # Check for incompatibilities
         incompatibility = pipeline_is_incompatible(self.current_pipeline)
@@ -511,20 +522,23 @@ class PipelineEnvironment(gym.Env):
                 self.stats['incompatible_reasons'][reason] = 0
             self.stats['incompatible_reasons'][reason] += 1
             
-            print(incompatibility)
+            if self.debug:
+                print(incompatibility)
             # Reduced negative reward for incompatible pipelines
-            incompatible_reward = -0.2  # Updated from -0.5
+            incompatible_reward = -0.3  # slightly stronger discourage
             # Remove the incompatible component
             removed_component = self.current_pipeline.pop()
-            print(f"Removed incompatible component: {removed_component}")
+            if self.debug:
+                print(f"Removed incompatible component: {removed_component}")
             next_state = self._get_state_representation()
             return next_state, incompatible_reward, False, {"performance": 0.0}
         
         # Check for redundant components
         redundancy_penalty = 0.0
         if len(set(self.current_pipeline)) != len(self.current_pipeline):
-            redundancy_penalty = -0.2  # Increased penalty for redundancy
-            print(f"Redundant: Pipeline contains duplicate components: {redundancy_penalty}")
+            redundancy_penalty = -0.25
+            if self.debug:
+                print(f"Redundant: Pipeline contains duplicate components: {redundancy_penalty}")
         
         done = False
         if str(component) == "END_PIPELINE" or len(self.current_pipeline) >= self.max_pipeline_length:
@@ -533,8 +547,15 @@ class PipelineEnvironment(gym.Env):
         next_state = self._get_state_representation()
         
         if done:
-            # Get base pipeline performance
-            performance = self._evaluate_pipeline(self.current_pipeline)
+            # Prefer CV for stability; capture status
+            cv_stats = self.cross_validate_pipeline([str(c) for c in self.current_pipeline], cv=3)
+            performance = cv_stats.get('mean_score', 0.0)
+            eval_status = cv_stats.get('status', 'success')
+            
+            # If CV failed or produced non-finite/zero performance, fallback to direct eval with timeout
+            if eval_status != 'success' or not np.isfinite(performance) or performance <= 0.0:
+                eval_score, eval_status = self.evaluate_with_timeout(self.current_pipeline, timeout=120, return_status=True)
+                performance = eval_score
             
             # Base reward is performance
             reward = performance
@@ -545,11 +566,13 @@ class PipelineEnvironment(gym.Env):
             # Penalize very short pipelines more strongly
             if pipeline_length <= 1:
                 short_penalty = -0.3
-                print(f"Very short pipeline penalty: {short_penalty}")
+                if self.debug:
+                    print(f"Very short pipeline penalty: {short_penalty}")
                 reward += short_penalty
             elif pipeline_length <= 2:
                 short_penalty = -0.2
-                print(f"Short pipeline penalty: {short_penalty}")
+                if self.debug:
+                    print(f"Short pipeline penalty: {short_penalty}")
                 reward += short_penalty
             
             # Analyze component types in the pipeline
@@ -557,21 +580,23 @@ class PipelineEnvironment(gym.Env):
             
             # Reward for balanced preprocessing
             has_imputer = any('Imputer' in c for c in self.current_pipeline)
-            has_scaler = any(x in components_str for x in ["Scaler", "Normalizer", "MinMax", "MaxAbs", "RobustScaler",
-        "QuantileTransformer", "PowerTransformer"])
+            has_scaler = any(x in components_str for x in ["Scaler", "Normalizer", "MinMax", "MaxAbs", "RobustScaler", "QuantileTransformer", "PowerTransformer"])
             has_feature_selection = any(x in components_str for x in ['SelectK', 'SelectPercentile', 'Variance'])
             
             # Reward proper preprocessing steps
             preprocessing_bonus = 0.1
             if has_imputer and has_scaler and has_feature_selection:
                 preprocessing_bonus = 0.3
-                print(f"Complete preprocessing bonus: {preprocessing_bonus}")
+                if self.debug:
+                    print(f"Complete preprocessing bonus: {preprocessing_bonus}")
             elif (has_imputer and has_scaler) or (has_scaler and has_feature_selection) or (has_imputer and has_feature_selection):
                 preprocessing_bonus = 0.2
-                print(f"Partial preprocessing bonus: {preprocessing_bonus}")
+                if self.debug:
+                    print(f"Partial preprocessing bonus: {preprocessing_bonus}")
             elif has_imputer or has_scaler or has_feature_selection:
                 preprocessing_bonus = 0.15
-                print(f"Basic preprocessing bonus: {preprocessing_bonus}")
+                if self.debug:
+                    print(f"Basic preprocessing bonus: {preprocessing_bonus}")
             
             reward += preprocessing_bonus
             
@@ -584,15 +609,49 @@ class PipelineEnvironment(gym.Env):
             
             pipeline_signature = tuple(self.current_pipeline)
             if pipeline_signature not in self.seen_pipelines:
-                exploration_bonus = 0.05  # Reward novel pipeline structures
-                print(f"Novel pipeline exploration bonus: {exploration_bonus}")
+                exploration_bonus = 0.05
+                if self.debug:
+                    print(f"Novel pipeline exploration bonus: {exploration_bonus}")
                 reward += exploration_bonus
                 self.seen_pipelines.add(pipeline_signature)
             
+            # Overuse penalty to reduce fixation on a single component (e.g., PowerTransformer)
+            total_use = max(1, len(self.usage_window))
+            power_freq = self.usage_window.count("PowerTransformer()")
+            freq = power_freq / total_use
+            if freq > 0.2:
+                overuse_penalty = 0.1 * (freq - 0.2)
+                reward -= overuse_penalty
+                if self.debug:
+                    print(f"Overuse penalty applied: -{overuse_penalty:.3f}")
+
+            # Soft length penalty to discourage overly long pipelines
+            length_penalty = 0.02 * pipeline_length
+            reward -= length_penalty
+            if self.debug and length_penalty:
+                print(f"Length penalty: -{length_penalty:.3f}")
+            
+            # NEW: Update stats counters regardless of evaluation path, and only count genuine successes
+            try:
+                pipeline_components = [c for c in self.current_pipeline if c != "END_PIPELINE"]
+                has_estimator = len(pipeline_components) > 0 and is_classifier(pipeline_components[-1])
+            except Exception:
+                has_estimator = False
+            
+            self.stats['total_pipelines'] += 1
+            # Count status-based outcomes
+            if eval_status == 'timeout':
+                self.stats['timeout_pipelines'] += 1
+            elif eval_status == 'exception':
+                self.stats['exception_pipelines'] += 1
+            elif has_estimator and np.isfinite(performance) and performance > 0.0:
+                self.stats['successful_pipelines'] += 1
+            # else: unsuccessful but not exception/timeout — do not count as successful
+            
             return next_state, reward, done, {"performance": performance}
         else:
-            # Non-terminal step rewards - REDUCE PENALTIES
-            step_reward = -0.005  # More gentle base penalty (was -0.01)
+            # Non-terminal step rewards - REDUCE PENALTIES + role-based redundancy discouragement
+            step_reward = -0.005
             
             # Add immediate feedback based on component selection
             component_str = str(component)
@@ -603,22 +662,27 @@ class PipelineEnvironment(gym.Env):
             if pipeline_len == 1:
                 # First component selection
                 if "Imputer" in component_str:
-                    immediate_reward = 0.05  # Higher reward for good first component
-                    print(f"Good first component (Imputer): +{immediate_reward}")
+                    immediate_reward = 0.05
+                    if self.debug:
+                        print(f"Good first component (Imputer): +{immediate_reward}")
                 elif any(x in component_str for x in ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 
-                                   'GradientBoostingClassifier', 'Kneighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']):
-                    immediate_reward = -0.005  # Smaller penalty
-                    print(f"Suboptimal first component (Classifier): {immediate_reward}")
+                                    'GradientBoostingClassifier', 'Kneighbors', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']):
+                    immediate_reward = -0.005
+                    if self.debug:
+                        print(f"Suboptimal first component (Classifier): {immediate_reward}")
             
             # Add to step() function for non-terminal steps
             if "Imputer" in component_str and len(self.current_pipeline) == 1:
-                print("Good first component (Imputer): +0.05")
+                if self.debug:
+                    print("Good first component (Imputer): +0.05")
                 immediate_reward += 0.05
             
-            # Add to step() method
-            # if pipeline_len == 1 and ("Imputer" in component_str):
-            #     reward += 0.15  # Strong signal to start with imputation
-
+            # Role-based redundancy penalty: discourage adding another non-repeatable role
+            role = COMPONENT_META.get(component_str, {}).get('role')
+            if role and not COMPONENT_META.get(component_str, {}).get('repeatable', False):
+                if any(COMPONENT_META.get(c, {}).get('role') == role for c in self.current_pipeline[:-1]):
+                    step_reward -= 0.02
+            
             # Final non-terminal step reward
             reward = step_reward + immediate_reward + redundancy_penalty
             
@@ -645,80 +709,43 @@ class PipelineEnvironment(gym.Env):
         return valid_actions
 
     def get_filtered_actions(self):
-        """Get filtered actions to prevent redundant components"""
+        """Get filtered actions using role grammar and incompatibility oracle"""
         valid_actions = self.get_valid_actions()
         filtered_actions = []
-        encoders = ['OneHotEncoder', 'OrdinalEncoder']
-        scalers = ['StandardScaler', 'MinMaxScaler', 'MaxAbsScaler', 'RobustScaler', 'Normalizer','QuantileTransformer', 'PowerTransformer']
-        imputers = ['SimpleImputer']
-        classifiers = ['Classifier', 'LogisticRegression', 'DecisionTreeClassifier', 'RandomForestClassifier', 'Kneighbors',
-                                      'GradientBoostingClassifier', 'SVC', 'HistGradientBoostingClassifier', 'MLP', 'AdaBoost', 'LinearSVC']
-        feature_extractors = ['PCA', 'TruncatedSVD', 'SelectKBest', 'SelectPercentile', 
-                              'VarianceThreshold', 'KernelPCA', 'Nystroem', 'RBFSampler',]
 
-        # Explicitly convert current_pipeline to strings for comparison
         pipeline_components = [str(comp) for comp in self.current_pipeline]
-        
-        # Track component types already in pipeline
-        has_imputer = any('SimpleImputer' in comp for comp in pipeline_components)
-        has_scaler = any(any(x in comp for x in scalers) 
-                        for comp in pipeline_components)
-        has_dim_reducer = any(any(x in comp for x in feature_extractors) 
-                             for comp in pipeline_components)
-        has_encoder = any('Encoder' in comp for comp in pipeline_components)
-        has_classifier = any(any(x in comp for x in classifiers) 
-                            for comp in pipeline_components)
-        
-        # Print current status for debugging
-        print(f"Pipeline has: imputer={has_imputer}, scaler={has_scaler}, " 
-              f"reducer={has_dim_reducer}, encoder={has_encoder}, classifier={has_classifier}")
-        
+        has_estimator = any(COMPONENT_META.get(c, {}).get('role') == 'estimator' for c in pipeline_components)
+
+        # If an estimator is already present, only allow terminator
+        if has_estimator:
+            for idx in valid_actions:
+                if str(self.available_components[idx]) == "END_PIPELINE":
+                    return [idx]
+            return []
+
         for action in valid_actions:
-            component = self.available_components[action]
-            comp_str = str(component)
-            
-            # Skip if exact component is already in pipeline
+            comp_str = str(self.available_components[action])
+
+            # Skip exact duplicate component
             if comp_str in pipeline_components:
                 continue
-            
-            # Skip if component type already exists in pipeline
-            skip = False
-            if (('SimpleImputer' in comp_str and has_imputer) or
-                (any(x in comp_str for x in ['Scaler', 'Normalizer', 'MinMax', 'MaxAbs', 'Robust']) and has_scaler) or
-                (any(x in comp_str for x in ['PCA', 'Select', 'Variance', 'SVD']) and has_dim_reducer) or
-                ('Encoder' in comp_str and has_encoder) or
-                (any(x in comp_str for x in ['Classifier', 'Regression', 'KNeighbors']) and has_classifier)):
-                skip = True
-            
-            if not skip:
-                filtered_actions.append(action)
-        
-        # Special handling for END_PIPELINE when we have a classifier
-        if not filtered_actions and has_classifier:
-            end_pipeline_action = None
-            for action in valid_actions:
-                if str(self.available_components[action]) == "END_PIPELINE":
-                    end_pipeline_action = action
-                    filtered_actions.append(action)
-                    print(f"Adding END_PIPELINE option (action {action})")
-                    break
-            
-            if end_pipeline_action is None:
-                print("WARNING: Could not find END_PIPELINE in available components!")
-        
-        # Modify get_filtered_actions()
-        if has_dim_reducer and any('Encoder' in self.available_components[action] for action in valid_actions):
-            # Don't allow encoders after dimension reduction
-            valid_actions = [a for a in valid_actions if 'Encoder' not in self.available_components[a]]
 
-        # In get_filtered_actions()
-        if has_dim_reducer:
-            # Don't allow scalers after dimension reduction
-            filtered_actions = [a for a in filtered_actions 
-                               if not any(x in self.available_components[a] 
-                                        for x in ['Scaler', 'Normalizer'])]
+            # Enforce non-repeatable roles via metadata
+            role = COMPONENT_META.get(comp_str, {}).get('role')
+            repeatable = COMPONENT_META.get(comp_str, {}).get('repeatable', False)
+            if role and not repeatable:
+                if any(COMPONENT_META.get(c, {}).get('role') == role for c in pipeline_components):
+                    continue
 
-        print(f"Filtered actions: {filtered_actions}")
+            # Simulate and reject if incompatible
+            tmp_pipeline = pipeline_components + [comp_str]
+            if pipeline_is_incompatible(tmp_pipeline):
+                continue
+
+            filtered_actions.append(action)
+
+        if self.debug:
+            print(f"Filtered actions: {filtered_actions}")
         return filtered_actions
 
     def _is_compatible_with_pipeline(self, component_name):
@@ -960,13 +987,14 @@ class PipelineEnvironment(gym.Env):
         
         return result[0]
 
-    def evaluate_with_timeout(self, pipeline, timeout=120):
-        """Evaluate pipeline with proper timeout handling and consistent interface"""
+    def evaluate_with_timeout(self, pipeline, timeout=120, return_status=False):
+        """Evaluate pipeline with proper timeout handling. If return_status=True, returns (score, status)."""
         import threading
         import time
         
         result = [0.0]
         error_occurred = [False]
+        status = ['success']
         
         def evaluation_thread():
             try:
@@ -978,6 +1006,7 @@ class PipelineEnvironment(gym.Env):
                     if not pipeline_components or not is_classifier(pipeline_components[-1]):
                         print("Pipeline evaluation skipped: Final pipeline must end with a classifier")
                         result[0] = 0.0
+                        status[0] = 'exception'
                         return
                         
                 from sklearn.base import clone
@@ -991,6 +1020,7 @@ class PipelineEnvironment(gym.Env):
                     if component_str not in COMPONENT_MAP:
                         print(f"Pipeline evaluation failed: Component not found: {component_str}")
                         result[0] = 0.0
+                        status[0] = 'exception'
                         return
                         
                     component = clone(COMPONENT_MAP[component_str])
@@ -1003,11 +1033,13 @@ class PipelineEnvironment(gym.Env):
                 except Exception as inner_e:
                     print(f"Pipeline fitting error: {str(inner_e)}")
                     result[0] = 0.0
+                    status[0] = 'exception'
                     
             except Exception as e:
                 print(f"Evaluation thread error: {str(e)}")
                 error_occurred[0] = True
                 result[0] = 0.0
+                status[0] = 'exception'
         
         thread = threading.Thread(target=evaluation_thread)
         thread.daemon = True
@@ -1021,7 +1053,10 @@ class PipelineEnvironment(gym.Env):
             print(f"Pipeline evaluation timed out after {timeout} seconds")
             return 0.0
         
+        if return_status:
+            return result[0], status[0]
         return result[0]
+    
     def _update_pipeline_memory(self, pipeline, performance):
         """Store successful pipelines with proper preprocessing value"""
         if not hasattr(self, 'pipeline_memory'):

@@ -81,3 +81,64 @@ COMPONENT_MAP = {
     # Special token
     "END_PIPELINE": "END_PIPELINE"
 }
+
+# Component metadata for principled grammar-based filtering.
+# role: transformer | estimator | post_estimator | terminator
+# repeatable: whether multiple instances of the same role are reasonable.
+# task: classification | regression | any
+COMPONENT_META = {
+    # Imputers
+    "SimpleImputer(strategy='mean')": {"role": "transformer", "repeatable": False, "task": "any"},
+    "SimpleImputer(strategy='median')": {"role": "transformer", "repeatable": False, "task": "any"},
+    "SimpleImputer(strategy='most_frequent')": {"role": "transformer", "repeatable": False, "task": "any"},
+    "SimpleImputer(strategy='constant', fill_value=0)": {"role": "transformer", "repeatable": False, "task": "any"},
+
+    # Scalers / normalizers
+    "StandardScaler()": {"role": "transformer", "repeatable": False, "task": "any"},
+    "MinMaxScaler()": {"role": "transformer", "repeatable": False, "task": "any"},
+    "RobustScaler()": {"role": "transformer", "repeatable": False, "task": "any"},
+    "MaxAbsScaler()": {"role": "transformer", "repeatable": False, "task": "any"},
+    "Normalizer()": {"role": "transformer", "repeatable": False, "task": "any"},
+
+    # Encoders
+    "OneHotEncoder(drop='first')": {"role": "transformer", "repeatable": False, "task": "any"},
+    "OrdinalEncoder()": {"role": "transformer", "repeatable": False, "task": "any"},
+
+    # Feature selection / reduction / transforms
+    "SelectKBest(k=5)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "SelectKBest(k=10)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "SelectPercentile(percentile=50)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "VarianceThreshold(threshold=0.1)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "PCA(n_components=2)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "PCA(n_components=5)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "PCA(n_components=10)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "TruncatedSVD(n_components=5)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "PolynomialFeatures(degree=2)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "QuantileTransformer(output_distribution='normal')": {"role": "transformer", "repeatable": False, "task": "any"},
+    "PowerTransformer()": {"role": "transformer", "repeatable": False, "task": "any"},
+    "Nystroem(kernel='rbf', n_components=100)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "RBFSampler(gamma=0.1, n_components=100)": {"role": "transformer", "repeatable": False, "task": "any"},
+    "KernelPCA(n_components=50, kernel='rbf')": {"role": "transformer", "repeatable": False, "task": "any"},
+
+    # Estimators
+    "LogisticRegression(max_iter=1000)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "LogisticRegression(max_iter=1000, C=0.1)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "LogisticRegression(max_iter=1000, C=10)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "DecisionTreeClassifier(max_depth=5)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "DecisionTreeClassifier(max_depth=10)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "DecisionTreeClassifier(max_depth=None)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "RandomForestClassifier(n_estimators=50)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "RandomForestClassifier(n_estimators=100)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "RandomForestClassifier(n_estimators=200)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "GradientBoostingClassifier(n_estimators=100)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "KNeighborsClassifier(n_neighbors=5)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "SVC(kernel='rbf', C=10)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "SVC(kernel='poly', degree=3)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "LinearSVC(max_iter=2000)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "MLPClassifier(hidden_layer_sizes=(100,), max_iter=500)": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "AdaBoostClassifier()": {"role": "estimator", "repeatable": False, "task": "classification"},
+    "HistGradientBoostingClassifier()": {"role": "estimator", "repeatable": False, "task": "classification"},
+
+    # Terminator
+    "END_PIPELINE": {"role": "terminator", "repeatable": True, "task": "any"},
+}
