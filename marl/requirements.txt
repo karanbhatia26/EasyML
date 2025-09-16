@@ -1,0 +1,38 @@
+# Core ML and RL libraries
+numpy>=1.21.0
+pandas>=1.5.0
+scikit-learn
+scipy>=1.9.0
+
+# Deep Learning and RL
+torch>=1.13.0
+gymnasium>=0.26.0
+stable-baselines3>=1.8.0
+
+# Data handling and preprocessing
+joblib>=1.2.0
+pickle-mixin>=1.0.2
+
+# Plotting and visualization
+matplotlib>=3.6.0
+seaborn>=0.11.0
+plotly>=5.15.0
+
+# Progress tracking
+tqdm>=4.64.0
+
+# Configuration and logging
+pyyaml>=6.0
+tensorboard>=2.11.0
+
+# Memory and performance optimization
+psutil>=5.9.0
+memory-profiler>=0.60.0
+
+# Statistical analysis
+statsmodels>=0.13.0
+
+black
+
+gymnasium
+polars
